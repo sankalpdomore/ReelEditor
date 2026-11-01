@@ -116,6 +116,7 @@ struct ProjectTitle: View {
 struct Dropdown: View {
   let options: [(id: String, label: String)]
   @Binding var selection: String
+  var icon: String? = nil // an icon before the value, saying what the field is (the account, the model)
   @State private var frame: CGRect = .zero
   @ObservedObject private var host = MenuHost.shared
 
@@ -127,6 +128,7 @@ struct Dropdown: View {
       }
     } label: {
       HStack(spacing: 8) {
+        if let icon { Icon(icon, size: 14).foregroundStyle(Ink.muted) }
         Text(options.first { $0.id == selection }?.label ?? selection).lineLimit(1)
         Spacer(minLength: 8)
         Icon(open ? "caret-up" : "caret-down", size: 12).foregroundStyle(Ink.muted)
@@ -290,342 +292,55 @@ extension Color {
 // ---------------------------------------------------------------------------------------------------------------------
 // Project
 
+// The Project card holds only what the project is (Sankalp, 1 Nov 2026): when it was started, when it was last edited,
+// who edited it, where its file is saved and what it reads. Nothing here changes the reel: each layer's settings open in
+// its own card from the timeline, and the app's own settings (appearance, agents) are under App settings in the top bar.
 struct ProjectPanel: View {
   @ObservedObject var model: EditorModel
-  @State private var title = ""
-  @AppStorage(Theme.key) private var theme = Theme.light.rawValue
+  @State private var editors: [ProjectEditor] = []
+  @State private var edited: Date?
 
-  // Adds another video as a clip at the end; its words are fetched in the background for the captions.
-  func addClip() {
-    let panel = NSOpenPanel()
-    panel.allowedContentTypes = [.mpeg4Movie, .quickTimeMovie, .movie]
-    panel.message = "Choose a video to add at the end. It is only read, never changed."
-    if panel.runModal() == .OK, let u = panel.url { model.run("add_clip", ["path": .string(u.path)]) }
+  static let when: DateFormatter = { let f = DateFormatter(); f.dateFormat = "d MMM yyyy, h:mm a"; return f }()
+  static func date(_ iso: String) -> Date? {
+    let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
   }
+  func home(_ path: String) -> String { path.replacingOccurrences(of: NSHomeDirectory(), with: "~") }
 
   var body: some View {
-    ScrollViewReader { proxy in
+    let p = model.loaded.project
+    let file = Store.document(model.name)?.path ?? ""
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
-        ReelCards(model: model).id("reel")
-        LookCard(model: model).id("look")
-        SoundCard(model: model).id("sound")
-        CommentsCard(model: model).id("comments")
-        SourcesCard(model: model).id("sources")
-        InsetCard(title: "Source", icon: "film-strip") {
-          FieldRow("Video") { Text(URL(fileURLWithPath: model.loaded.project.main.file).lastPathComponent).lineLimit(1).truncationMode(.middle) }
-          FieldRow("Size") { Text("\(Int(model.loaded.project.main.width)) × \(Int(model.loaded.project.main.height))") }
+        InsetCard(title: "Details", icon: "info") {
+          FieldRow("Started") { Text(Self.date(p.createdAt).map { Self.when.string(from: $0) } ?? p.createdAt) }
+          FieldRow("Last edited") { Text(edited.map { Self.when.string(from: $0) } ?? "Not yet") }
+          FieldRow("Saved at") { Text(home(file)).lineLimit(2).truncationMode(.middle).textSelection(.enabled).help(file) }
+          FieldRow("Video") { Text(home(p.main.file)).lineLimit(2).truncationMode(.middle).textSelection(.enabled).help(p.main.file) }
           FieldRow("Length") { Text("\(timecode(model.plan.editDuration)) to \(timecode(model.plan.duration / model.speed))").monospacedDigit() }
-          FieldRow("Project file") { Text((Store.document(model.name)?.path ?? "").replacingOccurrences(of: NSHomeDirectory(), with: "~")).lineLimit(1).truncationMode(.middle) }
-          Note("The video is only ever read. Every edit lives in the project's one file, \(model.name)\(Store.DOC_EXT).")
-          HStack(spacing: 8) {
-            Button { NSWorkspace.shared.activateFileViewerSelecting([Store.document(model.name) ?? Store.root]) } label: { IconLabel("Project file", icon: "folder-open", size: 12) }.pill(.outline, .xs)
-            Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: model.loaded.project.main.file)]) } label: { IconLabel("Show video", icon: "file-video", size: 12) }.pill(.outline, .xs)
-          }
+          FieldRow("Size") { Text("\(Int(p.main.width)) × \(Int(p.main.height))") }
         }
-        InsetCard(title: "Clips and voice over", icon: "stack") {
-          Note("Right click a clip on the timeline to rename it, mute its sound or lay a voice over on it.")
-          HStack(spacing: 8) {
-            Button { addClip() } label: { IconLabel("Add a video clip", icon: "film-strip", size: 12) }.pill(.outline, .xs)
-            Button { model.chooseOverlay(at: model.clock.time, muteClip: nil) } label: { IconLabel("Add audio at the playhead", icon: "waveform", size: 12) }.pill(.outline, .xs)
-          }
-        }
-        InsetCard(title: "Captions and title", icon: "closed-captioning") {
-          Toggle("Burn in captions", isOn: Binding(get: { model.flags.captions }, set: { model.run("set_captions", ["enabled": .bool($0)]) }))
-            .toggleStyle(.pillSwitch).disabled(model.loaded.words.isEmpty)
-          Toggle("Show title", isOn: Binding(get: { model.flags.title }, set: { model.run("set_title", ["enabled": .bool($0), "text": .string(title)]) }))
-            .toggleStyle(.pillSwitch)
-          Field("Title text") {
-            TextField("Title text", text: $title).textFieldStyle(.field).onSubmit { model.run("set_title", ["enabled": .bool(!title.isEmpty), "text": .string(title)]) }
-          }
-        }
-        InsetCard(title: "Transcript", icon: "text-align-left") {
-          FieldRow("Words") { Text("\(model.loaded.words.count)").monospacedDigit() }
-          HStack(spacing: 8) {
-            Button(model.loaded.words.isEmpty ? "Transcribe" : "Transcribe again") { model.transcribe() }.pill(.outline, .xs)
-              .disabled(!model.loaded.project.main.hasAudio || model.status["state"]?.string == "transcribing")
-            Button("Import words JSON") {
-              let panel = NSOpenPanel(); panel.allowedContentTypes = [.json]
-              if panel.runModal() == .OK, let u = panel.url { model.run("import_transcript", ["path": .string(u.path)]) }
-            }.pill(.outline, .xs)
-          }
-        }
-        InsetCard(title: "Export", icon: "download-simple") {
-          HStack(spacing: 8) {
-            Button { model.chooseExport() } label: { IconLabel("Export MP4", icon: "download-simple", size: 14) }
-              .pill(.primary, .sm).disabled(model.status["state"]?.string == "exporting")
-            if model.status["kind"]?.string == "export", let f = model.status["result"]?["file"]?.string {
-              Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: f)]) } label: { IconLabel("Show export", icon: "folder-open", size: 12) }.pill(.outline, .xs)
+        InsetCard(title: "Edited by", icon: "users") {
+          if editors.isEmpty { Note("No edits recorded yet. Edits are recorded from 1 Nov 2026 on.") }
+          ForEach(editors) { e in
+            VStack(alignment: .leading, spacing: 2) {
+              Text(e.who).font(.inter(14, .medium)).foregroundStyle(Ink.text).lineLimit(1)
+              Text([e.account, "\(e.edits) \(e.edits == 1 ? "edit" : "edits")", "last \(Self.when.string(from: Date(timeIntervalSince1970: e.last)))"].compactMap { $0 }.joined(separator: " \u{00B7} "))
+                .font(.inter(12)).foregroundStyle(Ink.faint).lineLimit(1)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
           }
-          if model.status["kind"]?.string == "export", let m = model.status["message"]?.string {
-            if model.status["state"]?.string == "exporting" { ProgressBar(value: model.status["progress"]?.double ?? 0) }
-            Note(m)
-          }
-        }
-        InsetCard(title: "Appearance", icon: "paint-brush") {
-          SegmentTabs(items: Theme.allCases.map { SegmentItem(value: $0.rawValue, label: $0.title) }, selection: $theme, fullWidth: true)
-        }
-        InsetCard(title: "Agents (MCP)", icon: "plugs-connected") {
-          Note("Claude or any MCP client can edit this project's clips, cuts, words and animations. This window follows along live.")
-          CommandBox(text: MCPDetails.command)
         }
       }
       .padding(.horizontal, 16).padding(.bottom, 16)
     }
-    // REEL_EDITOR_CARD=look (or sound, comments, sources) scrolls to that card, for checking it in a snapshot.
-    .onAppear { if let c = ProcessInfo.processInfo.environment["REEL_EDITOR_CARD"] { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { proxy.scrollTo(c, anchor: .top) } } }
-    }
-    .onAppear { title = model.loaded.project.edits.titleText ?? "" }
-    .onChange(of: model.loaded.project.rev) { _, _ in title = model.loaded.project.edits.titleText ?? title }
-  }
-}
-
-// A thin progress bar: a #eee track, a #111 fill.
-struct ProgressBar: View {
-  let value: Double
-  var body: some View {
-    GeometryReader { g in
-      ZStack(alignment: .leading) {
-        Capsule().fill(Ink.shell)
-        Capsule().fill(Ink.strong).frame(width: g.size.width * max(0, min(1, value)))
-      }
-    }
-    .frame(height: 4)
-  }
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-// The cards for what the web editor added after 23 Oct 2026: the reel's status and post caption, its look, the voices
-// and the music, comments, the source files, and the references and AI cost.
-
-struct ReelCards: View {
-  @ObservedObject var model: EditorModel
-  @State private var caption = ""
-
-  var body: some View {
-    let e = model.loaded.project.edits
-    InsetCard(title: "Reel", icon: "film-reel") {
-      Field("Status") {
-        SegmentTabs(items: [SegmentItem(value: "draft", label: "Draft", icon: "note-pencil"), SegmentItem(value: "live", label: "Live", icon: "check-circle")],
-                    selection: Binding(get: { model.live ? "live" : "draft" }, set: { model.run("set_reel_status", ["status": .string($0)]) }), fullWidth: true)
-      }
-      Field("Caption to post with it") {
-        TextEditor(text: $caption)
-          .font(.inter(14)).scrollContentBackground(.hidden)
-          .padding(8).frame(height: 88)
-          .background(RoundedRectangle(cornerRadius: 8).fill(Ink.raised))
-          .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Ink.border, lineWidth: 1))
-      }
-      if caption != (e.caption ?? "") {
-        HStack { Spacer(); Button("Save caption") { model.run("set_reel_caption", ["text": .string(caption)]) }.pill(.primary, .xs) }
-      }
-      HStack(spacing: 12) {
-        Field("Caption x") { NumberBox(value: e.captionPos?.x ?? 0) { model.run("set_caption_position", ["x": .number($0), "y": .number(e.captionPos?.y ?? defaultCaptionY)]) } }
-        Field("Caption y") { NumberBox(value: e.captionPos?.y ?? defaultCaptionY) { model.run("set_caption_position", ["x": .number(e.captionPos?.x ?? 0), "y": .number($0)]) } }
-        if e.captionPos != nil { Button("Reset") { model.run("set_caption_position", ["reset": true]) }.pill(.outline, .xs).padding(.top, 16) }
-      }
-      Note("Where the burnt in captions sit, in pixels of the full frame: x from the centre, y down from the top.")
-      if let refs = e.references, !refs.isEmpty {
-        Field("References") {
-          VStack(alignment: .leading, spacing: 4) {
-            ForEach(refs, id: \.path) { r in HStack(spacing: 8) { Icon(r.kind == "json" ? "brackets-curly" : "file-text", size: 12).foregroundStyle(Ink.muted); Text(r.title).font(.inter(13)) } }
-          }
-        }
-      }
-      if let c = e.cost {
-        FieldRow("AI generations") { Text("\(c.total.generations), about ₹\(Int(c.total.inr.rounded()))").monospacedDigit() }
-      }
-    }
-    .onAppear { caption = e.caption ?? "" }
-    .onChange(of: model.loaded.project.rev) { _, _ in caption = model.loaded.project.edits.caption ?? caption }
+    .onAppear(perform: reload)
+    .onChange(of: model.loaded.project.rev) { _, _ in reload() }
+    .onChange(of: model.loaded.animations.rev) { _, _ in reload() }
   }
 
-  var defaultCaptionY: Double {
-    let s = model.exportSize
-    return s.width > s.height ? 900 : 1400
-  }
-}
-
-// A number field that saves on Return or when it loses focus.
-struct NumberBox: View {
-  let value: Double
-  let commit: (Double) -> Void
-  @State private var text = ""
-  @FocusState private var focused: Bool
-  var body: some View {
-    TextField("", text: $text).textFieldStyle(.field).focused($focused)
-      .onAppear { text = fmt(value) }
-      .onChange(of: value) { _, v in if !focused { text = fmt(v) } }
-      .onSubmit { save() }
-      .onChange(of: focused) { _, f in if !f { save() } }
-  }
-  func fmt(_ v: Double) -> String { v == v.rounded() ? String(Int(v)) : String(format: "%.1f", v) }
-  func save() { if let v = Double(text.trimmingCharacters(in: .whitespaces)), abs(v - value) > 0.001 { commit(v) } }
-}
-
-struct LookCard: View {
-  @ObservedObject var model: EditorModel
-  static let keys: [(String, String, ClosedRange<Double>)] = [
-    ("saturation", "Saturation", -100...100), ("brightness", "Brightness", -100...100), ("exposure", "Exposure", -100...100),
-    ("contrast", "Contrast", -100...100), ("temperature", "Temperature", -100...100), ("sharpness", "Sharpness", 0...100), ("vignette", "Vignette", 0...100),
-  ]
-
-  var body: some View {
-    let look = model.loaded.project.edits.look ?? ReelLook()
-    let saved = Looks.list()
-    InsetCard(title: "Look", icon: "palette") {
-      if !saved.isEmpty {
-        Field("Saved look") {
-          Dropdown(options: [("", "Custom")] + saved.map { ($0.name, $0.name + ($0.default ? ", default" : "")) },
-                   selection: Binding(get: { look.name ?? "" }, set: { if !$0.isEmpty { model.run("set_video_look", ["template": .string($0)]) } }))
-        }
-      }
-      ForEach(Self.keys, id: \.0) { k in
-        ValueSlider(label: k.1, range: k.2, value: value(look, k.0)) { v in model.run("set_video_look", [k.0: .number(v)]) }
-      }
-      HStack(spacing: 8) {
-        Button("Reset") { model.run("set_video_look", ["reset": true]) }.pill(.outline, .xs)
-        Spacer()
-      }
-      Note("The whole reel's look. A clip can carry its own: right click it on the timeline.")
-    }
-  }
-
-  func value(_ l: ReelLook, _ k: String) -> Double {
-    switch k {
-    case "saturation": return l.saturation
-    case "brightness": return l.brightness
-    case "exposure": return l.exposure
-    case "contrast": return l.contrast
-    case "temperature": return l.temperature
-    case "sharpness": return l.sharpness
-    default: return l.vignette
-    }
-  }
-}
-
-struct SoundCard: View {
-  @ObservedObject var model: EditorModel
-
-  func chooseMusic() {
-    let panel = NSOpenPanel()
-    panel.allowedContentTypes = [.audio, .mp3, .mpeg4Audio, .wav, .aiff]
-    panel.message = "Choose a music bed. It is only read, never changed."
-    if panel.runModal() == .OK, let u = panel.url { model.run("set_music", ["track": .string(u.path)]) }
-  }
-
-  var body: some View {
-    let e = model.loaded.project.edits
-    InsetCard(title: "Sound", icon: "speaker-high") {
-      ValueSlider(label: "Voice volume", range: 0...10, step: 0.1, format: { "\(Int(($0 * 100).rounded()))%" }, value: e.voiceGain ?? 1) { model.run("set_voice_gain", ["gain": .number($0)]) }
-      ValueSlider(label: "Voice bass", range: -12...12, format: { String(format: "%+.0f dB", $0) }, value: e.voiceEq?.bass ?? 0) { model.run("set_voice_eq", ["bass": .number($0)]) }
-      ValueSlider(label: "Voice treble", range: -12...12, format: { String(format: "%+.0f dB", $0) }, value: e.voiceEq?.treble ?? 0) { model.run("set_voice_eq", ["treble": .number($0)]) }
-      Hairline()
-      if let m = e.music, let track = m.track {
-        FieldRow("Music") { Text(URL(fileURLWithPath: track).lastPathComponent).lineLimit(1).truncationMode(.middle) }
-        ValueSlider(label: "Music volume", range: 0...1, step: 0.05, format: { "\(Int(($0 * 100).rounded()))%" }, value: m.gain) { model.run("set_music", ["gain": .number($0)]) }
-        Toggle("Mute the music", isOn: Binding(get: { m.mute }, set: { model.run("set_music", ["mute": .bool($0)]) })).toggleStyle(.pillSwitch)
-        HStack(spacing: 8) {
-          Button { chooseMusic() } label: { IconLabel("Change track", icon: "music-notes", size: 12) }.pill(.outline, .xs)
-          Button { model.run("set_music", ["none": true]) } label: { IconLabel("Remove", icon: "trash", size: 12) }.pill(.outline, .xs)
-        }
-      } else {
-        Note("No music bed. It plays under the voices at its own speed, never sped up with the reel.")
-        Button { chooseMusic() } label: { IconLabel("Add music", icon: "music-notes", size: 12) }.pill(.outline, .xs)
-      }
-    }
-  }
-}
-
-// Comments left on words or on a range of the timeline, for Claude to act on (list_comments, add_comment).
-struct CommentsCard: View {
-  @ObservedObject var model: EditorModel
-  @State private var draft = ""
-  @State private var showResolved = false
-
-  var body: some View {
-    let all = Comments.read(model.name)
-    let shown = all.filter { showResolved || $0.status != "resolved" }
-    let _ = model.loaded.project.rev // read again whenever the project changes
-    InsetCard(title: "Comments", icon: "chat-centered-text") {
-      if shown.isEmpty { Note(all.isEmpty ? "No comments yet." : "Every comment is resolved.") }
-      ForEach(shown, id: \.id) { c in
-        VStack(alignment: .leading, spacing: 4) {
-          HStack(alignment: .top, spacing: 8) {
-            Text("\u{201C}\(c.words)\u{201D}").font(.inter(12, italic: true)).foregroundStyle(Ink.faint).lineLimit(2)
-            Spacer(minLength: 4)
-            if c.status == "resolved" {
-              Button("Reopen") { model.run("reopen_comment", ["id": .string(c.id)]) }.pill(.ghost, .xs)
-            } else {
-              Button { model.run("resolve_comment", ["id": .string(c.id)]) } label: { IconLabel("Resolve", icon: "check", size: 12) }.pill(.outline, .xs)
-            }
-          }
-          Text(c.comment).font(.inter(13)).foregroundStyle(c.status == "resolved" ? Ink.faint : Ink.text)
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Ink.sunken))
-      }
-      if all.contains(where: { $0.status == "resolved" }) {
-        Toggle("Show resolved", isOn: $showResolved).toggleStyle(.pillSwitch)
-      }
-      Field(target.map { "Comment on \($0)" } ?? "Select words or a range to comment on it") {
-        HStack(spacing: 8) {
-          TextField("What should change", text: $draft).textFieldStyle(.field).onSubmit { add() }
-          Button("Add") { add() }.pill(.primary, .xs).disabled(target == nil || draft.trimmingCharacters(in: .whitespaces).isEmpty)
-        }
-      }
-    }
-  }
-
-  var target: String? {
-    if let r = model.selectedWords { return r.count == 1 ? "1 word" : "\(r.count) words" }
-    if let s = model.selection { return "\(timecode(s.s)) to \(timecode(s.e))" }
-    return nil
-  }
-
-  func add() {
-    let t = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !t.isEmpty else { return }
-    if let r = model.selectedWords { model.run("add_comment", ["from": .number(Double(r.lowerBound)), "to": .number(Double(r.upperBound)), "comment": .string(t)]) }
-    else if let s = model.selection { model.run("add_comment", ["start": .number(s.s), "end": .number(s.e), "comment": .string(t)]) }
-    else { return }
-    draft = ""
-  }
-}
-
-// Every file the project reads, whether it is still there, and Relink for one that was moved (check_sources).
-struct SourcesCard: View {
-  @ObservedObject var model: EditorModel
-  @State private var rows: [JSON] = []
-
-  var body: some View {
-    InsetCard(title: "Source files", icon: "files") {
-      ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
-        let found = r["found"]?.bool ?? true
-        HStack(spacing: 8) {
-          Icon(found ? "check-circle" : "warning-circle", size: 14, fill: true).foregroundStyle(found ? Ink.green : Ink.red)
-          VStack(alignment: .leading, spacing: 2) {
-            Text(r["label"]?.string ?? r["id"]?.string ?? "").font(.inter(13)).foregroundStyle(Ink.text).lineLimit(1)
-            Text(URL(fileURLWithPath: r["url"]?.string ?? "").lastPathComponent).font(.inter(12)).foregroundStyle(Ink.faint).lineLimit(1).truncationMode(.middle)
-          }
-          Spacer(minLength: 8)
-          if !found, let id = r["id"]?.string {
-            Button("Relink") { model.relink(id) }.pill(.primary, .xs)
-          }
-        }
-      }
-      if rows.isEmpty { Note("Checking the files.") }
-    }
-    .onAppear { check() }
-    .onChange(of: model.loaded.project.rev) { _, _ in check() }
-  }
-
-  func check() {
-    Task {
-      if case .ok(let r) = await callTool("check_sources", ["project": .string(model.name)]) {
-        rows = r["sources"]?.array ?? []
-      }
-    }
+  func reload() {
+    editors = Editors.list(model.name)
+    edited = Store.document(model.name).flatMap { (try? FileManager.default.attributesOfItem(atPath: $0.path)[.modificationDate]) as? Date }
   }
 }

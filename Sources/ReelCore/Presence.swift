@@ -13,7 +13,6 @@ public struct MCPPresence: Codable, Sendable, Identifiable {
   public var lastSeen: Double
   public var lastTool: String?
   public var lastToolAt: Double?
-  public var listening: Bool? = nil // waiting in wait_for_app_message for a message from the app's chat
   // The Claude Code session this server runs under, when its client is Claude Code: the account it is signed in to,
   // the config folder (~/.claude, ~/.claude-2 and so on), the session's name and its transcript, from which the app
   // adds up the tokens it has used. Only the email and organisation are read from the account file, never a token.

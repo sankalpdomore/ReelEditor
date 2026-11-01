@@ -22,8 +22,9 @@
 
 ### Phase 2: MCP server and the shared tool layer ✅ COMPLETE
 - [x] `reel-mcp`, an MCP server over stdio shipped inside the app (`Contents/MacOS/reel-mcp`) - every button in the app calls the same tool an agent calls (`Sources/ReelCore/Tools.swift`), and every call is checked against the tool's JSON schema
-- [x] Presence heartbeat - each running server writes `.mcp/<pid>.json` with its client, Mac, last tool and whether it is listening, refreshed every five seconds and removed on exit (`Presence.swift`)
-- [x] Chat through MCP - `wait_for_app_message`, `reply_in_app` and `get_app_chat`, so a Claude Code session told once to listen answers the app's Chat; messages carry the project, playhead, clip and selection
+- [x] Presence heartbeat - each running server writes `.mcp/<pid>.json` with its client, Mac and last tool, refreshed every five seconds and removed on exit (`Presence.swift`)
+- [x] Chat through MCP - `wait_for_app_message`, `reply_in_app` and `get_app_chat`, so a Claude Code session told once to listen answered the app's Chat; removed on 1 Nov 2026 in Phase 8 for the direct chat
+- [x] Any session works with the open app (Sankalp, 1 Nov 2026) - `open_in_app` takes `path` to open any `.reel.json` in a tab, starting the app when closed, and `get_app_state` returns the tabs, the project in front, the playhead and the selection, from `.app-state.json` the app writes (`AppState.swift`)
 - [x] Registered for Claude Code on all three accounts on 31 Oct 2026 - `claude mcp add --scope user reel-editor` in `~/.claude`, `~/.claude-2` and `~/.claude-3`, each confirmed Connected
 
 ### Phase 3: Parity with the web editor's tools ✅ COMPLETE
@@ -50,27 +51,33 @@
 ### Phase 6: Editor layout and interaction ✅ COMPLETE
 - [x] Window laid out like the web reel editor - a top bar (brand, undo and redo, the reel's name with its Draft or Live pill, the Wide, Tall and Distraction free tabs, Export on Cmd E), browser style project tabs with + New / Open project, and the Open a reel page with a dashed drop area and project cards
 - [x] Transcript column headed TRANSCRIPT with the cuts and seconds saved, Approve for waiting cuts, Project, Chat and Open folder; the reel's title as plain text until clicked, so it never takes the keyboard on its own; a time column and a coloured ring and heading per part; line height 1.16 times the 16 point type, words 2 points apart with 2 points of padding each side (Sankalp, 31 Oct 2026)
+- [x] Project card as details only (Sankalp, 1 Nov 2026) - started, last edited, saved at, video, length, size and Edited by (each session or the app with its account, edits and last one, from `_cache/<name>/editors.json`, `Editors.swift`); the reel's settings cards removed; App settings button after Export with the appearance and the MCP command
+- [x] Text fields keep their own keys (Sankalp, 1 Nov 2026) - Cmd Delete, Option Delete, Fn Delete with Cmd or Option, and Cmd Z with Shift Cmd Z edit the field being typed in instead of reaching Cut Selection or Undo Edit (`TextKeys`)
 - [x] Selecting - drag across words, or click and shift click, then a menu floats at the selection with Cut, Uncut, Correct (one word typed for each selected) and Comment for Claude; a range dragged on the timeline gets Cut, Uncut and Comment; Escape lets go
 - [x] Timeline - layer names in a column on the left (Add layer, Animation, Video, Audio, Voice and face, Captions), a 48 point gap before time zero and 24 after the end as on the web, cuts as red hatching (red kept for cuts only), animation blocks in their own colour with a light fill of it, ruler dots kept clear of the time labels
 - [x] Timeline controls - pinch to zoom around the fingers, = and - to zoom, speed and zoom steppers, Follow in a pill of its own; the timeline zoom and Follow are saved
-- [x] Layer settings float above the layer clicked - an animation's kind, times, side, height and fields; a clip's name, sound, title, look, placement, voice over, split and delete; an overlay's name, volume, voice or sound effect, words, split and remove (`Floating.swift`); the Project card holds the reel's status, caption and its position, look, sound, comments, source files with Relink, clips, title, transcript, export, theme and the MCP command
+- [x] Layer settings float above the layer clicked - an animation's kind, times, side, height and fields; a clip's name, sound, title, look, placement, voice over, split and delete; an overlay's name, volume, voice or sound effect, words, split and remove (`Floating.swift`); the Project card holds only the project's details (started, last edited, saved at, video, length, size) and who edited it, since 1 Nov 2026, and App settings beside Export hold the appearance and the MCP command
 - [x] Animation blocks drag to move and stretch from either edge - the drags take priority over the timeline's own seek and select drag and are measured in the window's space so they never jitter; the edges are 8 point grab areas with a grip on hover
 - [x] Resizable panels - the dividers between the transcript and the video and above the timeline drag and reset on a double click, and their sizes are saved per landscape and portrait video
 - [x] Menus never open outside the window - a dropdown's options open in the window's menu layer, right aligned under the field with an arrow at the top right pointing at its caret (`MenuHost.swift`)
 
 ### Phase 7: MCP connection panel, accounts and usage ✅ COMPLETE
 - [x] The pill at the right of the tab row - a green dot, the Claude logo (`Resources/Brand/claude.svg`, from the web app's brand marks) and "Claude session (n)", the sessions using this editor, with a #ddd border
-- [x] The panel drops down under the pill inside the window with two tabs - This editor (only the sessions that have called a tool or listen to the Chat) and All sessions - and draws each account as LiveAssistant does, a tree with a branch to its 5 hour limit, its weekly limit and each session
+- [x] The panel drops down under the pill inside the window with two tabs - This editor (only the sessions that have called a tool) and All sessions - and draws each account as LiveAssistant does, a tree with a branch to its 5 hour limit, its weekly limit and each session
 - [x] Which account a session is on - the server reads `CLAUDE_CONFIG_DIR` and `<config>/sessions/<parent pid>.json`, and the app finds the same from outside for servers started earlier; only the account's email and organisation are read, never a token; the plan comes from `claude auth status`
 - [x] Limits read as LiveAssistant reads them (`AccountLimits.swift`) - the claude command line of that account is asked one word on Haiku (about 2,000 tokens) and its `rate_limit_event` gives each window's use and reset, at most every 20 minutes or on Refresh
 - [x] This editor's share of each window - a two colour bar, green for the sessions using the editor and blue for the rest of the account, estimated as the account's use times their share of the tokens the account spent in that window (cache reads at a tenth)
 - [x] Tokens per session from its own transcript, its agents included (`SessionUsage.swift`), checked equal to an independent count (73.5M tokens over 250 messages)
-- [x] Disconnect - a labelled button per session with a confirm sends its `reel-mcp` SIGTERM, so the session loses the editor's tools until `/mcp` reconnects it; the Claude session keeps running
+- [x] Disconnect - a labelled button per session asks Disconnect? with No and Yes, and Yes sends its `reel-mcp` SIGTERM and takes it off the panel at once (Sankalp, 1 Nov 2026), so the session loses the editor's tools until `/mcp` reconnects it; the Claude session keeps running
+- [x] Connect help (Sankalp, 1 Nov 2026) - while no Claude has used the editor, the panel shows a line to paste into any Claude Code chat to connect it and the `claude mcp add` command for chats without the tools
 - [x] Logs - `account_limits`, `mcp_session_usage`, `editor_share_of_limits` and `mcp_disconnect` lines in the app's log when the connections change, every 20 minutes and when the panel opens
 
 ### Phase 8: Chat with Claude ✅ COMPLETE
-- [x] Two pairs of tabs at the top of the Chat - Direct or Claude Code chooses who answers, Side panel or Floating chooses where it sits (a 400 point column on the right of the window, or a card under the button); both are remembered
+- [x] Two pairs of tabs at the top of the Chat - Direct or Claude Code chose who answers until 1 Nov 2026, Side panel or Floating chooses where it sits (a 400 point column on the right of the window, or a card under the button); both are remembered
 - [x] Direct chat (`DirectChat.swift`) - the app starts the claude command line itself on the account, model (Sonnet, Opus, Haiku) and effort (default, low, medium, high, extra high, max) picked in the chat, with this app's `reel-mcp` as its only tools (`--strict-mcp-config`, `--tools ""`, `--allowedTools mcp__reel-editor`), and keeps it running for the conversation; each message goes with what is on screen
+- [x] Direct is the only chat (Sankalp, 1 Nov 2026) - the Claude Code route and its tools `wait_for_app_message`, `reply_in_app` and `get_app_chat` removed, since an idle listener woke its session every few minutes and spent tokens; the Direct and Claude Code tabs are gone and the Side panel and Floating icons sit beside the account
+- [x] Rule books (Sankalp, 1 Nov 2026) - each project keeps its own rules folder (`rulesDir` in its file) and a new project starts with the folder saved last (`rulesDir` in settings.json, `_rules` until one is picked); every .md, .markdown and .txt in it goes into Claude's system prompt once per conversation with one line saying how many were sent, and `get_rules` rereads the folder on request (`Rules.swift`); checked end to end on Haiku on a scratch folder of three rule books
+- [x] Rule books into the chat (Sankalp, 1 Nov 2026) - .md, .markdown and .txt files dropped on the chat are saved to the project's rules folder, never over a different file of the same name; a folder change copies nothing and says in the chat to copy or drop the rule books; checked in the app on a scratch project
 - [x] Direct chat checked end to end on 31 Oct 2026 - on Haiku on support@nextdoor.company, Claude called `get_animations` and answered with the three animations for about $0.007; every start and turn is logged with its tokens and cost
 - [x] Account list without duplicates - one entry per email; the `~/.claude-secondary` shortcut to `~/.claude-2` was removed on 31 Oct 2026 at Sankalp's request, no data touched
 
@@ -78,6 +85,7 @@
 - [x] One JSON file per project, `<name>.reel.json`, with sections for the project and its edit list, animations, transcript, words of added videos and voice overs, undo history, comments and draft (Sankalp, 1 Nov 2026) - the store keeps naming each section by its old file name, so `Store.file(name, "project.json")` reads and writes the `project` section (`Sources/ReelCore/Project.swift`)
 - [x] Saved in any folder - New Project from Video (Cmd N) asks where to save the file; `create_project` takes `folder`; `projects.json` in the Reel Editor folder lists where each file is and when it was opened
 - [x] Open Project (Cmd O) opens a `.reel.json` from anywhere; `add_project` and `remove_project` put a file on the list or take it off, leaving the file
+- [x] Move a project file to another folder (Sankalp, 1 Nov 2026) - Move on each Open a reel card, shown on hover, and Move to another folder in its right click menu; in the top bar, a gear beside the reel's name with Project details, Show in Finder and Move to another folder; pick a folder in Finder and only the `.reel.json` moves; the video stays, an open tab keeps working, and `move_project` does the same for agents
 - [x] Only the tabs left open last time reopen at launch, not every project; the Open a reel page lists recent projects with their paths, with Show in Finder and Remove from this list
 - [x] Job status, the lock and cached waveforms in `_cache/<name>/`; exports beside the project file in `<name> exports/`; a parsed file is cached by its modification time so the two second polling reads a file only when it changed
 - [x] Old project folders become one file each on first launch, the old folder kept in `_migrated/`; checked on a copy of a test project (four undo steps, words and a comment carried over), then edits, undo, redo, rename, export, save elsewhere, remove and add back all work on the one file
@@ -99,8 +107,8 @@
 - [ ] Update the Mac app note in the main `PRD.md` (around line 1500), which still lists the look, voice gain, music and face layer as missing
 
 ### Phase 12: Testing and Validation 🚧 IN PROGRESS
-- [x] MCP suite - 338 of 338 checks pass across the 80 tools, rerun after the merge, the design work and the move to one file per project
-- [x] Interface checks through window snapshots (`REEL_EDITOR_SNAPSHOT`, with `REEL_EDITOR_FLOAT`, `REEL_EDITOR_CARD`, `REEL_EDITOR_SELECT`, `REEL_EDITOR_MCP`, `REEL_EDITOR_OPEN_MENU` and `REEL_EDITOR_DIRECT_SAY` to open a state at launch) for the editor, dark mode, 80% zoom, the cards, the menus and the panel
+- [x] MCP suite - 383 of 383 checks pass across the 81 tools, rerun after the merge, the design work, the move to one file per project, `move_project`, the removal of the chat listening tools, and `open_in_app` by path with `get_app_state`, `get_rules`, per project rules folders with `set_rules_folder`, and the editors of a project
+- [x] Interface checks through window snapshots (`REEL_EDITOR_SNAPSHOT`, with `REEL_EDITOR_FLOAT`, `REEL_EDITOR_APP_SETTINGS`, `REEL_EDITOR_SELECT`, `REEL_EDITOR_MCP`, `REEL_EDITOR_OPEN_MENU` and `REEL_EDITOR_DIRECT_SAY` to open a state at launch) for the editor, dark mode, 80% zoom, the cards, the menus and the panel
 - [ ] Hands on checks that snapshots cannot make - trackpad pinch on the timeline, dragging the dividers, dragging and stretching animation blocks, the video's place while the window is zoomed, and the spring of each card
 - [ ] Automated interface tests - none exist; `swift test` finds no tests
 - [ ] A long project from start to export in the Mac app alone, compared with the web editor's export of the same edits
@@ -150,7 +158,7 @@
 
 Reel Editor for Mac is ContentApp's reel editor as its own native Mac app, built with SwiftUI and AVFoundation, with an MCP server inside it so Claude or any agent edits the same projects through tools. It is a separate port of the web editor (`/reel-editor`, `lib/reel-tools`), not a wrapper: the two share the idea, the edit decision list and the tool names, not the files. The video is never touched; every edit is JSON in the project's one file, `<name>.reel.json`, saved in any folder, and the preview and the export are drawn from the same composition, so what plays is what exports.
 
-Since 31 Oct 2026 the app looks like the main ContentApp web app rather than stock macOS, does everything the web editor's tools allow, and can talk to Claude two ways: a Claude Code session listening over MCP, or a Claude the app starts itself. The MCP pill shows which Claude is connected, and its panel shows each account's limits and how much of them this editor used.
+Since 31 Oct 2026 the app looks like the main ContentApp web app rather than stock macOS, does everything the web editor's tools allow, and can talk to Claude from its Chat, a Claude the app starts itself with the editor's tools; Claude Code sessions edit through the same tools over MCP. The MCP pill shows which Claude is connected, and its panel shows each account's limits and how much of them this editor used.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -172,14 +180,14 @@ Since 31 Oct 2026 the app looks like the main ContentApp web app rather than sto
 │  │ 3. Edit by hand                                                   │  │
 │  │ Drag across words: Cut, Uncut, Correct, Comment for Claude        │  │
 │  │ Click a layer on the timeline: its settings float above it        │  │
-│  │ Project card: status, caption, look, sound, comments, files       │  │
+│  │ Project card: started, last edited, saved at, who edited it       │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                    │                                    │
 │                                    ▼                                    │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │ 4. Or ask Claude                                                  │  │
 │  │ Direct chat: the app runs its own Claude on a picked account      │  │
-│  │ Or a Claude Code session over MCP (reel-mcp), listening to Chat   │  │
+│  │ Claude Code sessions edit over MCP (reel-mcp) from their own chat │  │
 │  │ Both edit the same JSON files through the same tools              │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                    │                                    │
@@ -252,13 +260,13 @@ It is Sankalp's own tool for cutting the talking head and job lead reels he post
 claude mcp add --scope user reel-editor -- "$HOME/Applications/Reel Editor.app/Contents/MacOS/reel-mcp"
 ```
 
-For a session to listen to the Chat, tell it once: "Listen to the Reel Editor chat". For the direct chat nothing is needed; it starts with the first message.
+For the chat nothing is needed; it starts with the first message.
 
 ## Related documentation
 
 - `README.md` - how the app works in detail, every tool, keys, layouts and the debug switches
 - `CLAUDE.md` - the rules for working in this repo
-- `tests/mcp_test.py` - the MCP suite, 338 checks
+- `tests/mcp_test.py` - the MCP suite, 383 checks
 - ContentApp's `PRD.md` - the web reel editor's phases, and the frozen copy of this app in `tools/reel-editor-mac`
 - ContentApp's `lib/reel-tools/` and `components/reel-editor/` - the web editor the Mac app is ported from
 - `NextDoorCompanyCode/DOCUMENTATION-STRUCTURE.md` and `DESIGN.md` - the documentation and design rules this app follows

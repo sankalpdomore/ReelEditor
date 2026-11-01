@@ -158,6 +158,7 @@ struct EditorView: View {
       case 53: // Escape closes a menu, the MCP details or a floating card, leaves distraction free, or lets go of a selection
         if MenuHost.shared.menu != nil { MenuHost.shared.close() }
         else if AppModel.shared.mcpOpen { withAnimation(.cardClose) { AppModel.shared.mcpOpen = false } }
+        else if AppModel.shared.settingsOpen { withAnimation(.cardClose) { AppModel.shared.settingsOpen = false } }
         else if model.floating != nil { model.closeFloating() }
         else if model.focus { model.focus = false }
         else if model.selection != nil || model.selectedWords != nil { model.selection = nil; model.selectedWords = nil }

@@ -1,7 +1,7 @@
-// The Chat tab: one conversation with the agent connected over MCP (Claude Code, Codex and so on), for every project.
-// What Sankalp writes here goes to the agent with what he is looking at, and lands in the agent's own chat too; the
-// agent's answers (reply_in_app) and the tools it runs show here. The agent has to be listening: asked once in its own
-// chat to listen to the Reel Editor chat, it calls wait_for_app_message and keeps calling it.
+// The Chat: a conversation with the Claude the app starts itself (DirectChat), with the editor's tools. What Sankalp
+// writes goes in with what he is looking at, and Claude's answers and the tools it runs show here. Since 1 Nov 2026 this
+// is the only way to chat from the app: the Claude Code route, a session listening with wait_for_app_message, was
+// removed (Sankalp), so no session sits in a listening loop spending tokens.
 import AppKit
 import ReelCore
 import SwiftUI
@@ -10,52 +10,36 @@ struct ChatPanel: View {
   @ObservedObject var app: AppModel
   var model: EditorModel? = nil
   @ObservedObject private var direct = DirectChat.shared
-  @AppStorage("chatMode") private var mode = "direct" // direct: the app's own Claude; session: a listening Claude Code session
   @AppStorage("chatDock") private var dock = "floating" // side: a column on the right of the window; floating: a card
   @AppStorage("chatSide") private var sideOpen = false
   @State private var draft = ""
+  @State private var dropping = false // a file dragged over the chat
   @FocusState private var typing: Bool
-
-  static let listenPrompt = "Listen to the Reel Editor chat: call wait_for_app_message, act on each message I send there with the reel editor tools, answer with reply_in_app, and keep listening."
 
   var body: some View {
     VStack(spacing: 0) {
-      // Who answers (the app's own Claude, or a Claude Code session), and where the chat sits (a side panel or a card).
-      HStack(spacing: 8) {
-        SegmentTabs(items: [SegmentItem(value: "direct", label: "Direct", icon: "sparkle"), SegmentItem(value: "session", label: "Claude Code", icon: "terminal-window")], selection: $mode)
-        Spacer(minLength: 4)
+      // The account, model and effort, with where the chat sits (a side panel or a card) beside the account.
+      DirectHeader(direct: direct) {
         SegmentTabs(items: [SegmentItem(value: "side", label: "Side panel", icon: "sidebar-simple"), SegmentItem(value: "floating", label: "Floating", icon: "app-window")],
                     selection: Binding(get: { dock }, set: { setDock($0) }), iconOnly: true)
       }
-      .padding(.horizontal, 16).padding(.vertical, 12)
-      Hairline()
-      if mode == "direct" { DirectHeader(direct: direct) } else if app.listening.isEmpty { NotListening(app: app) }
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 12) {
-            if mode == "direct" {
-              if direct.messages.isEmpty {
-                empty("Ask Claude to edit this reel. It runs on the account above with the editor's tools, no Claude Code session needed. Each message goes with the project, the playhead and what is selected.")
-              }
-              ForEach(direct.messages) { m in DirectRow(m: m).id(m.id) }
-              if direct.state == "thinking" { HStack(spacing: 8) { Spinner(size: 12); Text("Claude is working").font(.inter(12)).foregroundStyle(Ink.faint) }.id("thinking") }
-            } else {
-              if app.chat.isEmpty {
-                empty("Write to the Claude Code session listening here. Each message goes with the project, the playhead and what is selected, and shows in Claude's own chat too.")
-              }
-              ForEach(app.chat) { m in ChatRow(m: m).id(m.id) }
+            if direct.messages.isEmpty {
+              empty("Ask Claude to edit this reel. It runs on the account above with the editor's tools. Each message goes with the project, the playhead and what is selected. Drop .md rule books here to add them to this project's rules.")
             }
+            ForEach(direct.messages) { m in DirectRow(m: m).id(m.id) }
+            if direct.state == "thinking" { HStack(spacing: 8) { Spinner(size: 12); Text("Claude is working").font(.inter(12)).foregroundStyle(Ink.faint) }.id("thinking") }
           }
           .padding(.horizontal, 16).padding(.vertical, 16)
         }
         .onAppear { scrollToEnd(proxy) }
         .onChange(of: direct.messages.count) { _, _ in withAnimation { scrollToEnd(proxy) } }
-        .onChange(of: app.chat.last?.id) { _, _ in withAnimation { scrollToEnd(proxy) } }
-        .onChange(of: mode) { _, _ in scrollToEnd(proxy) }
       }
       Hairline()
       HStack(alignment: .bottom, spacing: 8) {
-        TextField(mode == "direct" ? "Ask Claude to edit this reel" : "Message the listening session", text: $draft, axis: .vertical)
+        TextField("Ask Claude to edit this reel", text: $draft, axis: .vertical)
           .textFieldStyle(.plain)
           .font(.inter(14))
           .lineLimit(1...6)
@@ -66,11 +50,29 @@ struct ChatPanel: View {
           .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(typing ? Ink.borderHover : Ink.border, lineWidth: 1))
         Button { send() } label: { Icon("arrow-up", size: 16) }
           .pill(.primary, .icon)
-          .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (mode == "direct" && direct.state == "thinking"))
+          .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || direct.state == "thinking")
           .keyboardShortcut(.return, modifiers: .command)
           .help("Send (Return, or Cmd Return)")
       }
       .padding(16)
+    }
+    // Rule books dropped anywhere on the chat are saved into the project's rules folder.
+    .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
+      let group = DispatchGroup(); var urls: [URL] = []; let lock = NSLock()
+      for p in providers {
+        group.enter()
+        _ = p.loadObject(ofClass: URL.self) { u, _ in if let u { lock.lock(); urls.append(u); lock.unlock() }; group.leave() }
+      }
+      group.notify(queue: .main) { direct.addRuleFiles(urls) }
+      return true
+    }
+    .overlay {
+      if dropping {
+        RoundedRectangle(cornerRadius: 12).strokeBorder(Ink.borderHover, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+          .background(RoundedRectangle(cornerRadius: 12).fill(Ink.page.opacity(0.92)))
+          .overlay { VStack(spacing: 8) { Icon("book-open-text", size: 24).foregroundStyle(Ink.muted); Text("Drop .md files to add them to this project's rules").font(.inter(14)).foregroundStyle(Ink.secondary) } }
+          .padding(8).allowsHitTesting(false)
+      }
     }
   }
 
@@ -83,8 +85,7 @@ struct ChatPanel: View {
   }
 
   func scrollToEnd(_ proxy: ScrollViewProxy) {
-    if mode == "direct" { if direct.state == "thinking" { proxy.scrollTo("thinking", anchor: .bottom) } else if let l = direct.messages.last { proxy.scrollTo(l.id, anchor: .bottom) } }
-    else if let l = app.chat.last { proxy.scrollTo(l.id, anchor: .bottom) }
+    if direct.state == "thinking" { proxy.scrollTo("thinking", anchor: .bottom) } else if let l = direct.messages.last { proxy.scrollTo(l.id, anchor: .bottom) }
   }
 
   // Moves the chat: into the column on the right of the window, or back into the floating card.
@@ -96,22 +97,26 @@ struct ChatPanel: View {
   }
 
   func send() {
-    if mode == "direct" { direct.send(draft, context: app.screenContext()) } else { app.send(draft) }
+    direct.send(draft, context: app.screenContext())
     draft = ""
   }
 }
 
-// The direct chat's account and model, its state, and Restart or Stop.
-struct DirectHeader: View {
+// The direct chat's account and model, its state, and Restart or Stop, with an accessory beside the account.
+struct DirectHeader<Accessory: View>: View {
   @ObservedObject var direct: DirectChat
+  @ViewBuilder var accessory: () -> Accessory
   var body: some View {
     let accounts = DirectChat.accounts()
     VStack(alignment: .leading, spacing: 8) {
-      Dropdown(options: accounts.map { ($0.profile, $0.email) }, selection: Binding(get: { direct.profile }, set: { direct.profile = $0; if direct.state != "off" { direct.restart() } }))
       HStack(spacing: 8) {
-        Dropdown(options: [("sonnet", "Sonnet"), ("opus", "Opus"), ("haiku", "Haiku")], selection: Binding(get: { direct.model }, set: { direct.model = $0; if direct.state != "off" { direct.restart() } }))
+        Dropdown(options: accounts.map { ($0.profile, $0.email) }, selection: Binding(get: { direct.profile }, set: { direct.profile = $0; if direct.state != "off" { direct.restart() } }), icon: "envelope-simple")
+        accessory()
+      }
+      HStack(spacing: 8) {
+        Dropdown(options: [("sonnet", "Sonnet"), ("opus", "Opus"), ("haiku", "Haiku")], selection: Binding(get: { direct.model }, set: { direct.model = $0; if direct.state != "off" { direct.restart() } }), icon: "cpu")
         Dropdown(options: [("default", "Default effort"), ("low", "Low effort"), ("medium", "Medium effort"), ("high", "High effort"), ("xhigh", "Extra high effort"), ("max", "Max effort")],
-                 selection: Binding(get: { direct.effort }, set: { direct.effort = $0; if direct.state != "off" { direct.restart() } }))
+                 selection: Binding(get: { direct.effort }, set: { direct.effort = $0; if direct.state != "off" { direct.restart() } }), icon: "gauge")
       }
       HStack(spacing: 8) {
         Circle().fill(direct.state == "off" ? Ink.ghost : Ink.green).frame(width: 6, height: 6)
@@ -121,9 +126,45 @@ struct DirectHeader: View {
         if direct.state != "off" { Button("Stop") { direct.stop() }.pill(.ghost, .xs) }
         if !direct.messages.isEmpty { Button("Clear") { direct.clear() }.pill(.ghost, .xs) }
       }
+      RulesRow(direct: direct, app: AppModel.shared)
     }
     .padding(.horizontal, 16).padding(.vertical, 12)
     .onAppear { if accounts.first(where: { $0.profile == direct.profile }) == nil, let f = accounts.first { direct.profile = f.profile } }
+  }
+}
+
+// The rule books Claude starts each conversation with: how many, from which folder, a folder picked in Finder or the
+// default again, and the folder shown in Finder.
+struct RulesRow: View {
+  @ObservedObject var direct: DirectChat
+  @ObservedObject var app: AppModel // the project in front: each project keeps its own rules folder
+  var body: some View {
+    HStack(spacing: 8) {
+      Icon("book-open-text", size: 14).foregroundStyle(Ink.muted)
+      Text("\(direct.rules.count) rule \(direct.rules.count == 1 ? "book" : "books")").font(.inter(12, .medium)).foregroundStyle(Ink.secondary).fixedSize()
+      Text(direct.rulesDir.replacingOccurrences(of: NSHomeDirectory(), with: "~")).font(.inter(12)).foregroundStyle(Ink.faint)
+        .lineLimit(1).truncationMode(.middle)
+        .help(direct.rulesDir)
+      Spacer(minLength: 4)
+      Button("Change") { choose() }.pill(.ghost, .xs).help("Read this project's rule books from another folder. New projects start with it too.")
+      if !Rules.isDefault(URL(fileURLWithPath: direct.rulesDir)) { Button("Default") { direct.setRulesFolder(nil) }.pill(.ghost, .xs).help("Read this project's rule books from the Reel Editor folder's _rules") }
+      Button { NSWorkspace.shared.open(URL(fileURLWithPath: direct.rulesDir)) } label: { Icon("folder-open", size: 12) }.pill(.ghost, .iconSm)
+        .help("Show the rules folder in Finder")
+    }
+    .onAppear { direct.reloadRules() }
+    .onChange(of: app.selected) { _, _ in direct.reloadRules() }
+  }
+
+  func choose() {
+    let panel = NSOpenPanel()
+    panel.title = "Rules folder"
+    panel.message = "Pick the folder of rule books (.md or .txt) for this project. Claude starts each chat with every one of them, and new projects start with this folder."
+    panel.prompt = "Use Folder"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.canCreateDirectories = true
+    panel.directoryURL = URL(fileURLWithPath: direct.rulesDir)
+    if panel.runModal() == .OK, let u = panel.url { direct.setRulesFolder(u) }
   }
 }
 
@@ -133,6 +174,9 @@ struct DirectRow: View {
     switch m.role {
     case "activity":
       HStack(spacing: 8) { Icon("wrench", size: 12); Text(m.text).font(.inter(12)).lineLimit(1) }.foregroundStyle(Ink.faint).padding(.horizontal, 8)
+    case "rules":
+      HStack(alignment: .top, spacing: 8) { Icon("book-open-text", size: 12).padding(.top, 2); Text(m.text).font(.inter(12)).lineLimit(3) }
+        .foregroundStyle(Ink.faint).padding(.horizontal, 8)
     case "error":
       HStack(spacing: 8) { Icon("warning-circle", size: 12); Text(m.text).font(.inter(12)) }.foregroundStyle(Ink.red).padding(.horizontal, 8)
     case "you":
@@ -150,75 +194,6 @@ struct DirectRow: View {
           .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Ink.border, lineWidth: 1))
       }
       .frame(maxWidth: .infinity, alignment: .leading).padding(.trailing, 32)
-    }
-  }
-}
-
-// Shown while no agent is listening: what to ask Claude once so it does.
-struct NotListening: View {
-  @ObservedObject var app: AppModel
-  var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 8) {
-        Icon("ear-slash", size: 14)
-        Text(app.mcp.isEmpty ? "No agent is connected" : "\(app.mcp.first!.service) is connected but not listening").font(.inter(13, .semibold))
-      }
-      .foregroundStyle(Ink.strong)
-      Note("Messages wait here until an agent listens. Ask Claude once, in its own chat:")
-      HStack(alignment: .top, spacing: 8) {
-        Text(ChatPanel.listenPrompt).font(.inter(12, italic: true)).foregroundStyle(Ink.secondary).lineLimit(3).textSelection(.enabled)
-        Button("Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(ChatPanel.listenPrompt, forType: .string) }
-          .pill(.outline, .xs)
-      }
-    }
-    .padding(12)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(RoundedRectangle(cornerRadius: 12).fill(Ink.sunken))
-    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Ink.border, lineWidth: 1))
-    .padding(.horizontal, 24).padding(.top, 16)
-  }
-}
-
-struct ChatRow: View {
-  let m: ChatMessage
-
-  static func time(_ t: Double) -> String {
-    let f = DateFormatter(); f.dateFormat = "HH:mm"
-    return f.string(from: Date(timeIntervalSince1970: t))
-  }
-
-  var body: some View {
-    switch m.from {
-    case "activity":
-      HStack(spacing: 8) {
-        Icon("wrench", size: 12)
-        Text(m.text).font(.inter(12)).lineLimit(2)
-        Spacer(minLength: 0)
-        Text(Self.time(m.t)).font(.inter(11)).foregroundStyle(Ink.ghost)
-      }
-      .foregroundStyle(Ink.faint)
-      .padding(.horizontal, 8)
-    case "you":
-      VStack(alignment: .trailing, spacing: 4) {
-        Text(m.text).font(.inter(14)).textSelection(.enabled)
-          .padding(.horizontal, 16).padding(.vertical, 10)
-          .foregroundStyle(Ink.onPrimary)
-          .background(RoundedRectangle(cornerRadius: 16).fill(Ink.strong))
-        Text("\(Self.time(m.t)), \(m.status == "delivered" ? "delivered to \(m.client ?? "the agent")" : "waiting for an agent")\(m.context?["playhead"]?.double.map { ", at \(timecode($0))" } ?? "")")
-          .font(.inter(11)).foregroundStyle(Ink.faint)
-      }
-      .frame(maxWidth: .infinity, alignment: .trailing)
-      .padding(.leading, 48)
-    default:
-      VStack(alignment: .leading, spacing: 4) {
-        Text(m.text).font(.inter(14)).foregroundStyle(Ink.text).textSelection(.enabled)
-          .padding(.horizontal, 16).padding(.vertical, 10)
-          .background(RoundedRectangle(cornerRadius: 16).fill(Ink.sunken))
-          .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Ink.border, lineWidth: 1))
-        Text("\(m.client ?? "Agent"), \(Self.time(m.t))").font(.inter(11)).foregroundStyle(Ink.faint)
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.trailing, 48)
     }
   }
 }

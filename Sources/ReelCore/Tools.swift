@@ -4,11 +4,12 @@
 // edit time (the clips end to end, before the cuts) unless a field says output.
 import Foundation
 
-// Who is calling, set by the MCP server once its client introduces itself (Claude Code, Codex and so on), and a hook it
-// uses to show in its presence that the agent is listening to the app's chat.
+// Who is calling, set by the MCP server once its client introduces itself (Claude Code, Codex and so on).
 public enum ToolContext {
   nonisolated(unsafe) public static var client = "Agent"
-  nonisolated(unsafe) public static var onListening: (Bool) -> Void = { _ in }
+  // The Claude Code session the server runs under, by its name, and its account, for the project's list of editors.
+  nonisolated(unsafe) public static var session: String? = nil
+  nonisolated(unsafe) public static var account: String? = nil
   // A cut made through MCP (from the chat) waits for Sankalp's approval unless the call says approved; a cut made in the app
   // is his own and is approved at once.
   public static var cutsWaitForApproval: Bool { Log.source == "mcp" }
@@ -223,6 +224,14 @@ let coreTools: [ReelTool] = [
     let f = Store.document(n)?.path ?? ""
     try Store.forget(n)
     return ["project": .string(n), "removed": true, "file": .string(f)]
+  },
+  ReelTool(name: "move_project", description: "Moves a project's file (<name>.reel.json) into another folder, keeping its name, and points the list at its new place. Only the project file moves: the video and every other source stay where they are, and exports made earlier stay where they were. Refused when the folder already holds a file of that name.", inputSchema: obj([
+    "project": projectArg,
+    "folder": ["type": "string", "minLength": 1, "maxLength": 2048, "description": "Absolute path of the folder to move the project file into. Made if it does not exist."],
+  ], ["project", "folder"])) { i in
+    let n = try name(i)
+    let r = try Store.relocate(n, to: URL(fileURLWithPath: (i["folder"]!.string! as NSString).expandingTildeInPath, isDirectory: true))
+    return ["project": .string(n), "file": .string(r.to.path), "previous": .string(r.from.path)]
   },
   ReelTool(name: "get_project", description: "The whole state of a project: its clips (in and out in source seconds, editStart and editEnd in edit time), the cuts, the kept ranges, the length of the export (duration, after cuts and speed), the words with their indexes and edit times (empty without a transcript), the sections, the export options and the animation layer (each animation also has outStart and outEnd, its place in the export). Read this before editing and after, to check what an edit did.", inputSchema: obj(["project": projectArg, "words": ["type": "boolean", "default": true, "description": "Include the words. False for a shorter answer."]], ["project"])) { i in
     ReelState.of(try Store.load(try name(i)), words: i["words"]?.bool ?? true)
@@ -441,39 +450,58 @@ let coreTools: [ReelTool] = [
     let r = try Store.rename(try name(i), title: i["title"]!.string!)
     return ["project": .string(r.name), "previous": .string(r.previous), "title": i["title"]!]
   },
-  ReelTool(name: "wait_for_app_message", description: "Listens to the Reel Editor app's Chat tab: waits until Sankalp sends a message there (up to timeout_seconds), then returns every message he has sent since the last call, each with what he was looking at (project, playhead in edit time, selection, selected words). Use it to work with him from the app: act on each message with the other tools, answer with reply_in_app (and in your own chat), then call this again to keep listening. Returns messages empty and timedOut true when nothing came; call it again.", inputSchema: obj(["timeout_seconds": ["type": "integer", "minimum": 1, "maximum": 600, "default": 240, "description": "How long to wait for a message."]])) { i in
-    let until = Date().addingTimeInterval(Double(i["timeout_seconds"]?.int ?? 240))
-    ToolContext.onListening(true)
-    defer { ToolContext.onListening(false) }
-    while true {
-      let got = Chat.takeQueued(client: ToolContext.client)
-      if !got.isEmpty {
-        return ["messages": .array(got.map { m in ["id": .string(m.id), "text": .string(m.text), "project": m.project.map { .string($0) } ?? .null, "context": m.context ?? .null, "at": .string(ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: m.t)))] }),
-                "hint": "Act on these, answer with reply_in_app, then call wait_for_app_message again to keep listening."]
-      }
-      if Date() >= until { return ["messages": [], "timedOut": true, "hint": "Nothing yet. Call wait_for_app_message again to keep listening."] }
-      try? await Task.sleep(nanoseconds: 500_000_000)
-    }
-  },
-  ReelTool(name: "reply_in_app", description: "Answers Sankalp in the Reel Editor app's Chat tab: what you did, what you found, or a question. Plain text, a few lines. Give project when the answer is about one.", inputSchema: obj(["text": ["type": "string", "minLength": 1, "maxLength": 8000], "project": ["type": "string", "pattern": "^[a-z0-9-]{1,120}$"]], ["text"])) { i in
-    let m = Chat.reply(i["text"]!.string!, project: i["project"]?.string, client: ToolContext.client)
-    return ["sent": true, "id": .string(m.id)]
-  },
-  ReelTool(name: "get_app_chat", description: "The latest messages of the app's Chat tab, oldest first: Sankalp's (from you, with their context and whether they were delivered), the agents' answers and the activity lines of the tools they ran.", inputSchema: obj(["limit": ["type": "integer", "minimum": 1, "maximum": 500, "default": 40]])) { i in
-    ["messages": JSON.from(Array(Chat.all().suffix(i["limit"]?.int ?? 40)))]
-  },
   ReelTool(name: "get_logs", description: "Reads the QA logs in the _dump folder: one line per tool call (from the app or from an agent), app action and error, with the time, the build, the arguments, whether it worked, the error and how long it took. source app or mcp (default both), errors_only for the failures.", inputSchema: obj(["source": ["type": "string", "enum": ["app", "mcp"]], "errors_only": ["type": "boolean", "default": false], "limit": ["type": "integer", "minimum": 1, "maximum": 1000, "default": 80]])) { i in
     ["folder": .string(Log.dir.path), "lines": .array(Log.tail(source: i["source"]?.string, errorsOnly: i["errors_only"]?.bool ?? false, limit: i["limit"]?.int ?? 80))]
   },
-  ReelTool(name: "open_in_app", description: "Opens the project in the Reel Editor app window, so Sankalp sees the edit. The app also reloads on its own whenever a tool changes an open project.", inputSchema: obj(["project": projectArg], ["project"])) { i in
-    let n = try name(i)
+  ReelTool(name: "open_in_app", description: "Opens a project in a tab of the Reel Editor app, starting the app when it is not open, so Sankalp sees the edits as they land. Give project (a name from list_projects) or path (a <name>.reel.json file saved anywhere, which is put on the list first, as add_project does). Every later call names it by the project returned. The app reloads on its own whenever a tool changes an open project; get_app_state shows what it has on screen.", inputSchema: obj([
+    "project": projectArg,
+    "path": ["type": "string", "minLength": 1, "maxLength": 2048, "description": "Absolute path of a project file (.reel.json), instead of project."],
+  ])) { i in
+    let n: String
+    if let path = i["path"]?.string {
+      n = try Store.register(file: URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
+    } else if i["project"]?.string != nil {
+      n = try name(i)
+    } else { throw ToolError("invalid_input", "Give project (a name from list_projects) or path (a .reel.json file)") }
     _ = try Store.load(n)
-    guard ToolContext.mayOpen else { return ["project": .string(n), "opened": false, "skipped": "REEL_EDITOR_NO_OPEN is set"] }
+    let file: JSON = Store.document(n).map { .string($0.path) } ?? .null
+    guard ToolContext.mayOpen else { return ["project": .string(n), "file": file, "opened": false, "skipped": "REEL_EDITOR_NO_OPEN is set"] }
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
     p.arguments = ["reeleditor://open?project=\(n)"]
     try p.run(); p.waitUntilExit()
-    return ["project": .string(n), "opened": .bool(p.terminationStatus == 0)]
+    return ["project": .string(n), "file": file, "opened": .bool(p.terminationStatus == 0)]
+  },
+  ReelTool(name: "get_rules", description: "Reads Sankalp's rule books now: every .md, .markdown and .txt file in a project's rules folder (each project keeps its own; a new one starts with the folder saved last, the projects folder's _rules until he picks one), with its text. Give project for that project's folder; without it, the folder saved last. Call it when he asks you to read the rules again, or before editing when you have not seen them.", inputSchema: obj(["project": projectArg])) { i in
+    let p = i["project"]?.string != nil ? try name(i) : nil
+    if let p { _ = try Store.load(p) }
+    let dir = Rules.dir(for: p)
+    let books = Rules.books(in: dir)
+    return ["folder": .string(dir.path), "default": .bool(Rules.isDefault(dir)), "count": .number(Double(books.count)),
+            "books": .array(books.map { ["name": .string($0.name), "file": .string($0.file), "chars": .number(Double($0.text.count)), "text": .string($0.text)] })]
+  },
+  ReelTool(name: "set_rules_folder", description: "Sets the folder of rule books for a project and saves it as the last one, which every new project starts with. Without folder, the projects folder's _rules. Without project, only the folder new projects start with is set. A chat already running keeps the rules it started with; get_rules reads the new folder at once.", inputSchema: obj([
+    "project": projectArg,
+    "folder": ["type": "string", "minLength": 1, "maxLength": 2048, "description": "Absolute path of a folder of rule books (.md, .markdown, .txt). Left out, the default _rules."],
+  ])) { i in
+    let p = i["project"]?.string != nil ? try name(i) : nil
+    if let p { _ = try Store.load(p) }
+    var folder: URL? = nil
+    if let f = i["folder"]?.string {
+      let u = URL(fileURLWithPath: (f as NSString).expandingTildeInPath, isDirectory: true)
+      var isDir: ObjCBool = false
+      guard FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue else { throw ToolError("not_found", "No folder at \(u.path)") }
+      folder = u
+    }
+    try Rules.setDir(folder, project: p)
+    let dir = Rules.dir(for: p)
+    return ["project": p.map { .string($0) } ?? .null, "folder": .string(dir.path), "last": .string(Rules.lastDir.path), "count": .number(Double(Rules.books(in: dir).count))]
+  },
+  ReelTool(name: "get_app_state", description: "What the Reel Editor app shows right now: whether it is open, its tabs, the project in front and its file, the playhead (edit time) and whether it plays, the clip under the playhead, and what Sankalp has selected (a range, words with their text, an animation). Read it to talk about what he is looking at, for example \"cut this\" means the selection. running false means the app is not open; open_in_app starts it.", inputSchema: obj([:])) { _ in
+    guard let s = AppState.read(), var o = s.object else { return ["running": false, "hint": "The Reel Editor app is not open. open_in_app opens a project in it."] }
+    o["running"] = true
+    o["pid"] = nil
+    return .object(o)
   },
 ]
 
@@ -504,6 +532,8 @@ public func callTool(_ name: String, _ input: JSON?) async -> ToolReply {
   let ms = Int(Date().timeIntervalSince(started) * 1000)
   switch reply {
   case .ok(let r):
+    // Who edited the project, for its Project card.
+    if let p = r["project"]?.string, r["changed"]?.bool == true || ["create_project", "import_video"].contains(name) { Editors.record(p, tool: name) }
     var extra: [String: JSON] = ["by": .string(ToolContext.client)]
     for k in ["changed", "created", "duration", "project", "step", "overlaysMoved"] { if let v = r[k] { extra[k] = v } }
     Log.write("tool", name, args: args, ms: ms, extra: extra)
@@ -511,19 +541,4 @@ public func callTool(_ name: String, _ input: JSON?) async -> ToolReply {
     Log.write("tool", name, args: args, ok: false, error: "\(code): \(message)", ms: ms, extra: ["by": .string(ToolContext.client)])
   }
   return reply
-}
-
-// What an agent's tool call did, in a few words for the app's chat: "cut_range 1.0 to 2.5 s on intro-test".
-public func describeCall(_ name: String, _ args: JSON?) -> String? {
-  if ["wait_for_app_message", "reply_in_app", "get_app_chat", "get_logs", "get_project", "list_projects", "get_animations", "get_status", "list_animation_kinds",
-      "get_timeline", "list_reels", "list_comments", "get_draft_reel", "list_video_looks", "check_sources"].contains(name) { return nil }
-  let a = args ?? [:]
-  func n(_ k: String) -> String? { a[k]?.double.map { String(format: "%.2f", $0).replacingOccurrences(of: ".00", with: "") } }
-  var bits: [String] = []
-  if let s = n("start"), let e = n("end") { bits.append("\(s) to \(e) s") } else if let s = n("start") { bits.append("at \(s) s") }
-  if let at = n("at") { bits.append("at \(at) s") }
-  for k in ["clip", "id", "kind", "label", "title"] { if let v = a[k]?.string { bits.append(v) } }
-  if let ix = a["indexes"]?.array { bits.append("\(ix.count) words") } else if let f = a["from"]?.int, let t = a["to"]?.int { bits.append("words \(f) to \(t)") }
-  if let t = a["text"]?.string { bits.append("\"\(t.prefix(40))\"") }
-  return ([name.replacingOccurrences(of: "_", with: " ")] + bits).joined(separator: " · ")
 }

@@ -27,6 +27,7 @@ func attachSession(_ p: inout MCPPresence) {
   let s = Presence.claudeSession()
   p.account = s.account; p.accountOrg = s.accountOrg; p.profile = s.profile
   p.sessionName = s.sessionName; p.sessionCwd = s.cwd
+  ToolContext.session = s.sessionName.map { "\(p.service): \($0)" }; ToolContext.account = s.account
   if s.sessionId != p.sessionId || p.transcript == nil { p.sessionId = s.sessionId; p.transcript = s.transcript }
 }
 
@@ -58,7 +59,9 @@ let instructions = """
 Reel Editor edits videos without touching them: each project is one JSON file, <name>.reel.json, holding the edit \
 decision list, the animations, the transcript, the undo history, comments and the draft. It is saved in any folder \
 (create_project takes folder; the default is \(Store.root.path)), and list_projects shows each project's file; \
-add_project puts a file saved elsewhere on the list and remove_project takes one off, leaving the file. Start with list_projects or create_project, \
+add_project puts a file saved elsewhere on the list and remove_project takes one off, leaving the file. \
+open_in_app opens a project, or any .reel.json by its path, in the app (starting it when it is closed), and \
+get_app_state shows what Sankalp has on screen there: the project in front, the playhead and his selection. Start with list_projects or create_project, \
 read get_project, then edit with cut_range, delete_words, trim_clip, split_clip, add_animation and the rest. Times are \
 seconds in edit time (the clips end to end, before cuts). Every edit can be undone. The Reel Editor app reloads an open \
 project whenever these tools change it; open_in_app shows a project there. export renders an MP4. The tools of the web \
@@ -93,8 +96,6 @@ func handle(_ msg: JSON) async {
     let args = msg["params"]?["arguments"]
     switch await callTool(name, args) {
     case .ok(let result):
-      // What the agent did shows in the app's chat as a short activity line.
-      if let what = describeCall(name, args) { Chat.activity(what, project: args?["project"]?.string ?? result["project"]?.string, client: ToolContext.client) }
       var r: [String: JSON] = ["content": [["type": "text", "text": .string(result.text(pretty: false))]], "isError": false]
       if result.object != nil { r["structuredContent"] = result }
       reply(id ?? .null, .object(r))
@@ -121,7 +122,6 @@ Thread.detachNewThread {
   Thread.sleep(forTimeInterval: 0.2)
   leave()
 }
-ToolContext.onListening = { on in updatePresence { $0.listening = on ? true : nil } }
 log("ready, projects in \(Store.root.path)")
 Log.write("mcp", "start", extra: ["version": .string(VERSION), "root": .string(Store.root.path)])
 RunLoop.main.run() // the main run loop, not dispatchMain: Core Animation commits the export's layers on it

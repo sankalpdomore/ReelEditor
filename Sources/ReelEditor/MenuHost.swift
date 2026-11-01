@@ -10,6 +10,7 @@ import SwiftUI
     let anchor: CGRect
     let options: [(id: String, label: String)]
     let selected: String?
+    var icons: [String: String] = [:] // an icon before an option, for a menu of actions
     let pick: (String) -> Void
   }
   @Published private(set) var menu: Menu?
@@ -25,7 +26,7 @@ struct MenuLayer: View {
         Color.black.opacity(0.001).onTapGesture { host.close() }
         HStack(spacing: 0) {
           Spacer(minLength: 8)
-          OptionList(options: m.options, selected: m.selected) { id in m.pick(id); host.close() }
+          OptionList(options: m.options, selected: m.selected, icons: m.icons) { id in m.pick(id); host.close() }
             .frame(minWidth: max(200, m.anchor.width))
             .fixedSize()
             .cardChrome()

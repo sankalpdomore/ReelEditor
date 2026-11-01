@@ -19,26 +19,28 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
   @Published var selected: UUID?
   @Published var error: String? { didSet { if let error { Log.error("app", error) } } }
   @Published var creating = false
-  @Published private(set) var chat: [ChatMessage] = [] // the Chat tab, shared with the agents over MCP
-  private var chatStamp: Date? = nil
-  private var chatTimer: Timer?
   @Published private(set) var mcp: [MCPPresence] = [] // agents connected through reel-mcp right now
   @Published private(set) var titles: [String: String] = [:] // project name to the title shown on its tab
   @Published private(set) var live: Set<String> = []
   // The MCP details panel under the pill. REEL_EDITOR_MCP=editor (or all) opens it on that tab, for a snapshot.
   @Published var mcpOpen = ProcessInfo.processInfo.environment["REEL_EDITOR_MCP"] != nil
-  // The sessions talking to this editor: the ones that have called one of its tools or listen to its Chat tab, latest first.
+  // The App settings card under its button at the right of the top bar. REEL_EDITOR_APP_SETTINGS=1 opens it, for a snapshot.
+  @Published var settingsOpen = ProcessInfo.processInfo.environment["REEL_EDITOR_APP_SETTINGS"] != nil
+  // The sessions talking to this editor: the ones that have called one of its tools, latest first.
   // Ends one session's connection: its reel-mcp is asked to quit (SIGTERM), which removes its heartbeat, so the session
   // loses the editor's tools until it reconnects (/mcp in Claude Code). The Claude session itself keeps running.
   func disconnect(_ p: MCPPresence) {
     let ok = kill(p.pid, SIGTERM) == 0
     Log.write("app", "mcp_disconnect", ok: ok, error: ok ? nil : String(cString: strerror(errno)),
               extra: ["pid": .number(Double(p.pid)), "session": p.sessionName.map { .string($0) } ?? .null, "account": p.account.map { .string($0) } ?? .null])
-    if ok { mcp.removeAll { $0.pid == p.pid } } else { error = "Could not disconnect that session: \(String(cString: strerror(errno)))" }
+    if ok { disconnected.insert(p.pid); mcp.removeAll { $0.pid == p.pid } } else { error = "Could not disconnect that session: \(String(cString: strerror(errno)))" }
   }
+  // Sessions disconnected from the panel, kept out of it even before their heartbeat file is gone.
+  private var disconnected: Set<Int32> = []
+  var liveSessions: [MCPPresence] { Presence.live().filter { !disconnected.contains($0.pid) } }
 
-  func isTalking(_ p: MCPPresence) -> Bool { p.lastTool != nil || p.listening == true }
-  var talking: [MCPPresence] { mcp.filter { $0.lastTool != nil || $0.listening == true }.sorted { ($0.lastToolAt ?? 0) > ($1.lastToolAt ?? 0) } } // the projects whose reel is posted (status live); the rest are drafts
+  func isTalking(_ p: MCPPresence) -> Bool { p.lastTool != nil }
+  var talking: [MCPPresence] { mcp.filter { $0.lastTool != nil }.sorted { ($0.lastToolAt ?? 0) > ($1.lastToolAt ?? 0) } } // the projects whose reel is posted (status live); the rest are drafts
   @AppStorage("transcribeNew") var transcribeNew = true
   private var editors: [String: EditorModel] = [:]
   private var known: Set<String>
@@ -54,20 +56,35 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
     let kept = (UserDefaults.standard.stringArray(forKey: Self.tabsKey) ?? []).filter { names.contains($0) }
     tabs = kept.isEmpty ? [EditorTab(project: nil)] : kept.map { EditorTab(project: $0) }
     selected = tabs.first?.id
-    mcp = Presence.live()
+    mcp = liveSessions
     timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in MainActor.assumeIsolated { AppModel.shared.refresh() } }
-    chatTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { _ in MainActor.assumeIsolated { AppModel.shared.readChat() } }
-    readChat()
+    stateTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in MainActor.assumeIsolated { AppModel.shared.publishState() } }
     Log.write("app", "launch", extra: ["projects": .number(Double(names.count))])
   }
 
-  var listening: [MCPPresence] { mcp.filter { $0.listening == true } }
-
-  func readChat() {
-    let st = Chat.stamp()
-    guard st != chatStamp else { return }
-    chatStamp = st
-    chat = Chat.all()
+  // What is on screen, for any agent connected over MCP (get_app_state): written to <root>/.app-state.json when it changes.
+  private var stateTimer: Timer?
+  private var lastState: JSON?
+  func publishState() {
+    var s: [String: JSON] = ["pid": .number(Double(getpid())), "tabs": .array(tabs.compactMap(\.project).map { .string($0) }), "project": .null]
+    if let e = editor {
+      s["project"] = .string(e.name)
+      s["title"] = .string(e.title)
+      s["file"] = Store.document(e.name).map { .string($0.path) } ?? .null
+      s["playhead"] = .number(round3(e.clock.time))
+      s["playing"] = .bool(e.clock.playing)
+      if let c = locate(e.plan, e.clock.time)?.clip { s["clip"] = .string(c.id) }
+      if let r = e.selection { s["selection"] = ["start": .number(round3(r.s)), "end": .number(round3(r.e))] }
+      if let r = e.selectedWords, r.upperBound < e.words.count {
+        s["selectedWords"] = ["from": .number(Double(r.lowerBound)), "to": .number(Double(r.upperBound)), "text": .string(e.words[r].map(\.text).joined(separator: " "))]
+      }
+      if let a = e.selectedAnimation { s["selectedAnimation"] = .string(a) }
+    }
+    let state = JSON.object(s)
+    guard state != lastState else { return }
+    lastState = state
+    s["updatedAt"] = .number(Date().timeIntervalSince1970)
+    AppState.write(.object(s))
   }
 
   // What is on screen, in words, sent in front of a direct chat message.
@@ -79,26 +96,6 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
     if let r = e.selectedWords { parts.append("selected words \(r.lowerBound) to \(r.upperBound): \"\(e.words[r].map(\.text).joined(separator: " "))\"") }
     if let a = e.selectedAnimation { parts.append("selected animation \(a)") }
     return parts.joined(separator: ", ")
-  }
-
-  // Sends a message from the Chat tab with what is on screen: the project, the playhead, the selection and its words.
-  func send(_ text: String) {
-    let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !t.isEmpty else { return }
-    var context: [String: JSON] = [:]
-    if let e = editor {
-      context["project"] = .string(e.name)
-      context["projectTitle"] = .string(e.title)
-      context["playhead"] = .number(round3(e.clock.time))
-      if let c = locate(e.plan, e.clock.time)?.clip { context["clip"] = .string(c.id) }
-      if let s = e.selection { context["selection"] = ["start": .number(round3(s.s)), "end": .number(round3(s.e))] }
-      if let r = e.selectedWords {
-        context["selectedWords"] = ["from": .number(Double(r.lowerBound)), "to": .number(Double(r.upperBound)), "text": .string(e.words[r].map(\.text).joined(separator: " "))]
-      }
-      if let a = e.selectedAnimation { context["selectedAnimation"] = .string(a) }
-    }
-    Chat.post(t, project: editor?.name, context: context.isEmpty ? nil : .object(context))
-    readChat()
   }
 
   var current: EditorTab? { tabs.first { $0.id == selected } }
@@ -149,7 +146,7 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
   private var recordedAt = Date.distantPast
 
   func refresh() {
-    mcp = Presence.live()
+    mcp = liveSessions
     // The accounts, tokens and limits behind the connections go to the log when the connections change, and every 20 minutes.
     let pids = Set(mcp.map(\.pid))
     if pids != recordedPids || Date().timeIntervalSince(recordedAt) > AccountLimits.STALE {
@@ -235,6 +232,27 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
     } catch { self.error = String(describing: error) }
   }
 
+  // Moves a project's file to a folder picked in Finder; the video stays where it is, and an open tab keeps working.
+  func move(_ name: String) {
+    guard let from = Store.document(name) else { return }
+    let panel = NSOpenPanel()
+    panel.title = "Move the project"
+    panel.message = "Pick the folder to move \(from.lastPathComponent) into. Only the project file moves, the video stays where it is."
+    panel.prompt = "Move Here"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.canCreateDirectories = true
+    panel.allowsMultipleSelection = false
+    panel.directoryURL = from.deletingLastPathComponent()
+    guard panel.runModal() == .OK, let folder = panel.url else { return }
+    do {
+      let r = try Store.relocate(name, to: folder)
+      Log.write("app", "move_project", args: ["project": .string(name), "from": .string(r.from.path), "to": .string(r.to.path)])
+      projectFolder = folder.path
+      refresh()
+    } catch { self.error = String(describing: error) }
+  }
+
   // Takes a project off the Open a reel list and closes its tabs; the file stays where it is.
   func forget(_ name: String) {
     for t in tabs where t.project == name { close(t.id) }
@@ -276,6 +294,30 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
 
 extension String { var nilIfEmpty: String? { isEmpty ? nil : self } }
 
+// While a text field has the keyboard (the chat's input, a title, a name, a number), its editing keys work as in any
+// Mac text field (Sankalp, 1 Nov 2026), before the menu shortcuts that share them see the key: Cmd Delete deletes to the
+// start of the line instead of cutting the video's selection, Option Delete deletes a word, Fn Delete with Cmd or
+// Option deletes forward, and Cmd Z and Shift Cmd Z undo and redo the typing instead of the video's edits.
+enum TextKeys {
+  @MainActor static func handle(_ e: NSEvent) -> Bool {
+    guard let tv = e.window?.firstResponder as? NSTextView, tv.isEditable else { return false }
+    let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
+    let sel: Selector?
+    switch (e.keyCode, mods) {
+    case (51, [.command]): sel = #selector(NSResponder.deleteToBeginningOfLine(_:))
+    case (51, [.option]): sel = #selector(NSResponder.deleteWordBackward(_:))
+    case (117, [.command]): sel = #selector(NSResponder.deleteToEndOfLine(_:))
+    case (117, [.option]): sel = #selector(NSResponder.deleteWordForward(_:))
+    case (6, [.command]): sel = Selector(("undo:"))
+    case (6, [.command, .shift]): sel = Selector(("redo:"))
+    default: sel = nil
+    }
+    guard let sel else { return false }
+    if sel == Selector(("undo:")) || sel == Selector(("redo:")) { NSApp.sendAction(sel, to: nil, from: tv) } else { tv.doCommand(by: sel) }
+    return true
+  }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationWillFinishLaunching(_ notification: Notification) { DesignFonts.register() }
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -293,6 +335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       DispatchQueue.main.async { w.makeFirstResponder(nil) }
       return e
     }
+    NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in TextKeys.handle(e) ? nil : e }
     // REEL_EDITOR_SNAPSHOT=<file.png>: writes a picture of the window every few seconds, and the tabs beside it, for
     // checking the layout without screen recording access. The video does not show in it, only the interface.
     if let path = ProcessInfo.processInfo.environment["REEL_EDITOR_SNAPSHOT"] {
@@ -312,6 +355,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
   func application(_ application: NSApplication, open urls: [URL]) { Task { @MainActor in urls.forEach { AppModel.shared.handle(url: $0) } } }
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+  // Agents see the app as closed once it quits (get_app_state).
+  func applicationWillTerminate(_ notification: Notification) { AppState.clear() }
 }
 
 // The window's look: Light unless Sankalp picks Dark or System (View > Appearance, or the Project panel). Saved per Mac.
@@ -454,6 +499,18 @@ struct MainView: View {
     .coordinateSpace(.named("window"))
     // Dropdown menus, over everything, inside the window.
     .overlay(alignment: .topLeading) { MenuLayer() }
+    // App settings drop down from their button at the right of the top bar; a click anywhere else closes them.
+    .overlay(alignment: .topTrailing) {
+      if app.settingsOpen {
+        ZStack(alignment: .topTrailing) {
+          Color.black.opacity(0.001).onTapGesture { withAnimation(.cardClose) { app.settingsOpen = false } }
+          AppSettingsPanel(app: app)
+            .overlay(alignment: .topTrailing) { MenuArrow().frame(width: 16, height: 8).offset(x: -24, y: -7) }
+            .padding(.top, 56).padding(.trailing, 20)
+            .transition(.card(from: .topTrailing))
+        }
+      }
+    }
     // The MCP details drop down from the pill, right aligned under it; a click anywhere else closes them.
     .overlay(alignment: .topTrailing) {
       if app.mcpOpen {
@@ -491,15 +548,56 @@ struct TopBar: View {
         Text(app.current?.project.map { app.titles[$0] ?? $0 } ?? "Open a reel")
           .font(.inter(14)).foregroundStyle(Ink.secondary).lineLimit(1).truncationMode(.middle)
         if let model { StatusMenu(model: model) }
+        // The project's settings menu, which holds Move (Sankalp, 1 Nov 2026).
+        if let name = app.current?.project, let model { ProjectSettingsMenu(app: app, model: model, name: name) }
       }
       .layoutPriority(-1)
       Spacer(minLength: 16)
       if let model { EditorActions(model: model) }
+      Button { withAnimation(app.settingsOpen ? .cardClose : .cardOpen) { app.settingsOpen.toggle() } } label: { IconLabel("App settings", icon: "gear", size: 16) }
+        .pill(.outline, .md, active: app.settingsOpen).help("The app's appearance and how agents connect")
     }
     .padding(.horizontal, 20)
     .frame(height: 56)
     .background(WindowDragArea())
     .overlay(alignment: .bottom) { Hairline() }
+  }
+}
+
+// The gear beside the reel's name: a menu, in the window's menu layer, with the project's settings (the Project card),
+// Show in Finder and Move to another folder.
+struct ProjectSettingsMenu: View {
+  @ObservedObject var app: AppModel
+  let model: EditorModel
+  let name: String
+  @State private var frame: CGRect = .zero
+  @ObservedObject private var host = MenuHost.shared
+
+  var body: some View {
+    let open = host.menu?.anchor == frame && host.menu != nil
+    Button { if open { host.close() } else { host.open(menu) } } label: { Icon("gear-six", size: 16) }
+      .pill(.ghost, .icon, active: open)
+      .help("Project details, Show in Finder and Move")
+      .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("window")) }) { f in
+        frame = f
+        // REEL_EDITOR_OPEN_MENU=project-settings opens this menu once at launch, for checking it in a snapshot.
+        if ProcessInfo.processInfo.environment["REEL_EDITOR_OPEN_MENU"] == "project-settings", host.menu == nil, f.width > 0 {
+          DispatchQueue.main.asyncAfter(deadline: .now() + 1) { host.open(menu) }
+        }
+      }
+  }
+
+  var menu: MenuHost.Menu {
+    MenuHost.Menu(anchor: frame,
+                  options: [("settings", "Project details"), ("finder", "Show in Finder"), ("move", "Move to another folder…")],
+                  selected: nil, icons: ["settings": "sliders-horizontal", "finder": "folder-open", "move": "folder-simple"]) { [app, model, name] id in
+      switch id {
+      case "settings": model.toggle(.project)
+      case "finder": if let f = Store.document(name) { NSWorkspace.shared.activateFileViewerSelecting([f]) }
+      case "move": DispatchQueue.main.async { app.move(name) }
+      default: break
+      }
+    }
   }
 }
 
@@ -694,6 +792,32 @@ struct LiveDot: View {
 
 // The details panel: a white card that drops down from the MCP pill, its right edge on the pill's, inside the window,
 // growing out of its top right corner and shrinking back into it (DESIGN.md's dropdown motion).
+// The app's own settings, not any one reel's (Sankalp, 1 Nov 2026): the appearance, and how an agent connects over MCP.
+struct AppSettingsPanel: View {
+  @ObservedObject var app: AppModel
+  @AppStorage(Theme.key) private var theme = Theme.light.rawValue
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 8) {
+        Icon("gear", size: 16).foregroundStyle(Ink.muted)
+        Text("App settings").font(.inter(16, .semibold)).foregroundStyle(Ink.strong)
+        Spacer()
+        Button { withAnimation(.cardClose) { app.settingsOpen = false } } label: { Icon("x", size: 14) }.pill(.ghost, .iconSm).help("Close (Escape)")
+      }
+      InsetCard(title: "Appearance", icon: "paint-brush") {
+        SegmentTabs(items: Theme.allCases.map { SegmentItem(value: $0.rawValue, label: $0.title) }, selection: $theme, fullWidth: true)
+      }
+      InsetCard(title: "Agents (MCP)", icon: "plugs-connected") {
+        Note("Claude or any MCP client edits the same projects through the editor's tools, and this window follows along live. To add the tools to Claude Code:")
+        CommandBox(text: MCPDetails.command)
+      }
+    }
+    .padding(16)
+    .frame(width: 400)
+    .cardChrome()
+  }
+}
+
 struct MCPDetails: View {
   @ObservedObject var app: AppModel
   @ObservedObject private var limits = AccountLimits.shared
@@ -737,8 +861,8 @@ struct MCPDetails: View {
         Button { withAnimation(.cardClose) { app.mcpOpen = false } } label: { Icon("x", size: 14) }.pill(.ghost, .iconSm).help("Close (Escape)")
       }
       if app.mcp.isEmpty {
-        Note("No agent is using Reel Editor's tools right now. An agent connects when a session that has the reel-editor MCP server starts. To add it to Claude Code:")
-        CommandBox(text: Self.command)
+        Text("No Claude is connected").font(.inter(14, .semibold)).foregroundStyle(Ink.strong)
+        ConnectHelp()
       } else {
         SegmentTabs(items: [SegmentItem(value: "editor", label: "This editor", icon: "film-strip"), SegmentItem(value: "all", label: "All sessions", icon: "users-three")], selection: $tab, fullWidth: true)
         ScrollView {
@@ -746,7 +870,8 @@ struct MCPDetails: View {
             if tab == "editor" && app.talking.isEmpty {
               VStack(alignment: .leading, spacing: 8) {
                 Text("No Claude has used this editor yet").font(.inter(14, .semibold)).foregroundStyle(Ink.strong)
-                Note("\(app.mcp.count) \(app.mcp.count == 1 ? "session has" : "sessions have") the editor's tools but none has called one. Ask Claude to do something in the reel editor, or to listen to its Chat tab, and it shows here.")
+                Note("\(app.mcp.count) \(app.mcp.count == 1 ? "session has" : "sessions have") the editor's tools but none has called one.")
+                ConnectHelp()
               }
             }
             ForEach(accounts, id: \.account) { a in
@@ -843,6 +968,21 @@ struct AccountTree: View {
   }
 }
 
+// How to connect a Claude Code chat to the editor, shown while none is using it (Sankalp, 1 Nov 2026): a line to paste
+// into any chat that has the editor's tools, which makes it call one and show up here, and the command that gives Claude
+// Code the tools, after which every new chat connects on its own.
+struct ConnectHelp: View {
+  static let prompt = "Connect to the Reel Editor: call get_app_state from the reel-editor tools and tell me what I have open."
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Note("Paste this into any Claude Code chat to work with the editor from it. Once it calls a tool, it shows here.")
+      CommandBox(text: Self.prompt, copyLabel: "Copy")
+      Note("If that chat has no reel-editor tools, run this once in a terminal. Every new Claude Code chat then connects on its own; in a chat already open, type /mcp and reconnect reel-editor. For another Claude account, start the command with CLAUDE_CONFIG_DIR=~/.claude-2 (or that account's folder).")
+      CommandBox(text: MCPDetails.command)
+    }
+  }
+}
+
 // A session as a leaf of its account's tree: a green dot, its name, its tokens on the right, and under it the config
 // folder, the project folder and its last tool.
 struct SessionLeaf: View {
@@ -853,7 +993,7 @@ struct SessionLeaf: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 8) {
-        Circle().fill(p.lastTool != nil || p.listening == true ? Ink.green : Ink.ghost).frame(width: 6, height: 6)
+        Circle().fill(p.lastTool != nil ? Ink.green : Ink.ghost).frame(width: 6, height: 6)
         Text(p.sessionName ?? p.service).font(.inter(13, .medium)).foregroundStyle(Ink.text).lineLimit(1)
         Spacer(minLength: 8)
         if let u = usage, u.total > 0 {
@@ -861,8 +1001,10 @@ struct SessionLeaf: View {
             .help("\(compactCount(u.output)) written, \(compactCount(u.input + u.cacheWrite)) read, \(compactCount(u.cacheRead)) from the cache, \(u.messages) messages")
         }
         if confirming {
-          Button("Cancel") { confirming = false }.pill(.ghost, .xs)
-          Button { AppModel.shared.disconnect(p); confirming = false } label: { IconLabel("Disconnect", icon: "plugs", size: 12) }.pill(.destructive, .xs)
+          // Asked once, yes or no; on yes the session leaves the panel at once.
+          Text("Disconnect?").font(.inter(12, .medium)).foregroundStyle(Ink.strong).fixedSize()
+          Button("No") { confirming = false }.pill(.outline, .xs)
+          Button("Yes") { confirming = false; withAnimation(.cardClose) { AppModel.shared.disconnect(p) } }.pill(.destructive, .xs)
         } else {
           Button { confirming = true } label: { IconLabel("Disconnect", icon: "plugs", size: 12) }.pill(.outline, .xs)
             .help("Disconnect this session from the editor. In that Claude session, /mcp and reconnect reel-editor bring it back.")
@@ -870,8 +1012,7 @@ struct SessionLeaf: View {
       }
       .frame(height: TREE_ROW)
       Text([p.profile, p.sessionCwd.map { URL(fileURLWithPath: $0).lastPathComponent },
-            p.lastTool.map { "last \($0) \(p.lastToolAt.map { MCPDetails.ago($0) } ?? "")" } ?? "no tool yet",
-            p.listening == true ? "listening" : nil].compactMap { $0 }.joined(separator: " \u{00B7} "))
+            p.lastTool.map { "last \($0) \(p.lastToolAt.map { MCPDetails.ago($0) } ?? "")" } ?? "no tool yet"].compactMap { $0 }.joined(separator: " \u{00B7} "))
         .font(.inter(11)).foregroundStyle(Ink.faint).lineLimit(1).padding(.leading, 14).padding(.bottom, 4)
       if confirming {
         Note("It loses the editor's tools until you run /mcp in that session and reconnect reel-editor.").padding(.leading, 14).padding(.bottom, 4)
@@ -885,13 +1026,14 @@ struct SessionLeaf: View {
 // A command to copy: monospaced in a grey box, a Copy button beside it.
 struct CommandBox: View {
   let text: String
+  var copyLabel = "Copy command"
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text(text).font(.system(size: 11, design: .monospaced)).foregroundStyle(Ink.text).textSelection(.enabled)
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 8).fill(Ink.sunken))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Ink.border, lineWidth: 1))
-      Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) } label: { IconLabel("Copy command", icon: "copy", size: 12) }
+      Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) } label: { IconLabel(copyLabel, icon: "copy", size: 12) }
         .pill(.outline, .xs)
     }
   }
@@ -1013,7 +1155,14 @@ struct ProjectCard: View {
           .font(.inter(12)).foregroundStyle(Ink.ghost)
         }
         Spacer(minLength: 12)
-        Text(String(format: "%.1f s", row.duration)).font(.inter(16)).foregroundStyle(Ink.faint).monospacedDigit()
+        HStack(spacing: 12) {
+          // Move the project file to another folder, shown while the card is hovered.
+          Button { AppModel.shared.move(row.id) } label: { IconLabel("Move", icon: "folder-simple") }.pill(.outline, .sm)
+            .help("Move this project's file to another folder. The video stays where it is.")
+            .opacity(hover ? 1 : 0)
+            .allowsHitTesting(hover)
+          Text(String(format: "%.1f s", row.duration)).font(.inter(16)).foregroundStyle(Ink.faint).monospacedDigit()
+        }
       }
       .padding(.horizontal, 24).padding(.vertical, 16)
       .background(RoundedRectangle(cornerRadius: 12).fill(hover ? Ink.sunken : Ink.page))
@@ -1024,6 +1173,7 @@ struct ProjectCard: View {
     .onHover { hover = $0 }
     .contextMenu {
       Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: row.file)]) }
+      Button("Move to another folder…") { AppModel.shared.move(row.id) }
       Button("Remove from this list") { AppModel.shared.forget(row.id) }
     }
   }

@@ -11,6 +11,7 @@ public struct Project: Codable, Equatable, Sendable {
   public var rev = 0 // counts the saves, so an open window knows another caller changed it
   public var name: String // the folder's name, lowercase letters, digits and dashes
   public var title: String? = nil // what the project is called on screen, free text; nil shows the name
+  public var rulesDir: String? = nil // the folder of rule books this project's chat starts with; nil is the last one saved
   public var createdAt: String
   public var main: Source // the video the project was made from
   public var edits = Edl()
@@ -283,9 +284,10 @@ public enum Store {
     let enc = JSONEncoder()
     enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
     if let pt = part(url) {
-      guard let f = document(pt.name) else { throw ToolError("not_found", "No project called \(pt.name). list_projects shows them") }
       let v = try JSONSerialization.jsonObject(with: enc.encode(value), options: [.fragmentsAllowed])
+      // Where the document is, read under the lock, so a write never lands at the old place of a document being moved.
       try fileLock(file(pt.name, ".doc.lock")) {
+        guard let f = document(pt.name) else { throw ToolError("not_found", "No project called \(pt.name). list_projects shows them") }
         var o = (try? docObject(pt.name)) ?? ["format": "reel-editor-mac/1", "name": pt.name]
         if let sub = pt.sub { var w = o["words"] as? [String: Any] ?? [:]; w[sub] = v; o["words"] = w } else { o[pt.key] = v }
         try writeDoc(f, o)
@@ -357,6 +359,7 @@ public enum Store {
     let iso = ISO8601DateFormatter().string(from: Date())
     let main = Source(id: MAIN, file: path, duration: info.duration, hasAudio: info.hasAudio, width: info.width, height: info.height, label: video.lastPathComponent, origin: video.path)
     var project = Project(name: n, createdAt: iso, main: main)
+    project.rulesDir = Rules.lastDir.path // a new project starts with the rules folder saved last
     if let d = Looks.defaultLook() { project.edits.look = d.look }
     try write(project, file(n, "project.json"))
     try write(AnimationFile(), file(n, "animations.json"))
@@ -553,6 +556,29 @@ public enum Store {
     for (k, v) in map where v == name { map[k] = next }
     map[name] = next
     try? write(map, root.appendingPathComponent(".renames.json"))
+  }
+
+  // Moves a project's document into another folder under the same file name (Sankalp, 1 Nov 2026). Only the document
+  // moves: the video and every other source are read where they are, exports made earlier stay where they are, and new
+  // exports go beside the document's new place. The edits are held while it moves, and the list points at the new path.
+  public static func relocate(_ name: String, to folder: URL) throws -> (from: URL, to: URL) {
+    let fm = FileManager.default
+    guard let from = document(name), fm.fileExists(atPath: from.path) else { throw ToolError("not_found", "No project file for \(name). list_projects shows them") }
+    var isDir: ObjCBool = false
+    if fm.fileExists(atPath: folder.path, isDirectory: &isDir), !isDir.boolValue { throw ToolError("invalid_path", "\(folder.path) is a file, not a folder") }
+    try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+    let to = folder.standardizedFileURL.appendingPathComponent(from.lastPathComponent)
+    if to.resolvingSymlinksInPath().path == from.resolvingSymlinksInPath().path { return (from, to) }
+    if fm.fileExists(atPath: to.path) { throw ToolError("exists", "\(to.path) already exists. Pick another folder, or move that file first") }
+    try withLock(name) {
+      try fileLock(file(name, ".doc.lock")) {
+        try fm.moveItem(at: from, to: to)
+        do { try editRegistry { r in r[name] = Entry(path: to.path, openedAt: r[name]?.openedAt) } }
+        catch { try? fm.moveItem(at: to, to: from); throw error }
+      }
+    }
+    Log.write("core", "move_project", extra: ["project": .string(name), "from": .string(from.path), "to": .string(to.path)])
+    return (from, to)
   }
 
   // Old project names and what each one is called now.
