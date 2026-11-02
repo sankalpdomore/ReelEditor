@@ -1,7 +1,7 @@
 # Reel Editor for Mac
 
 **Last Updated**: November 2, 2026  
-**Status**: 🚧 Phase 11 and 11b In Progress - reels of several videos, a chat per project that writes rule books, notifications and Claude editing alone landed on 2 Nov 2026; the music library, caption styles, free layers and moving words by hand are still open.  
+**Status**: 🚧 Phase 11 and 11b In Progress - reels of several videos, a chat per project that writes rule books, notifications, Claude editing alone, captions and text layers (Phase 11c) and the voice up to 1000% landed on 2 Nov 2026; the music library, free layers, the web editor's React animations and moving words by hand are still open.  
 **Priority**: High  
 
 > **Its own repo since 1 Nov 2026.** The app began as `tools/reel-editor-mac` inside ContentApp and was detached into `~/Coding projects/ReelEditor` (github.com/sankalpdomore/ReelEditor); the copy in ContentApp is frozen as it was that day.
@@ -156,7 +156,7 @@
 - [x] MCP suite - 554 of 554 checks pass across the 98 tools, with the voice at 200 and 1000 percent measured louder, the caption style, hidden captions, text layers and their export, `delete_rule_book`, `transcribe` of every video after a silent first one, `write_rule_book`, `edit_rule_book` and `make_project_rules_folder`, `move_range`, `insert_clip`, `create_project` of several videos, `get_words` of one video, `get_paragraphs`, `set_focus`, `get_words`, the long transcript left out of `get_project` and `audit_audio` added on 2 Nov 2026, rerun after the merge, the design work, the move to one file per project, `move_project`, the removal of the chat listening tools, and `open_in_app` by path with `get_app_state`, `get_rules`, per project rules folders with `set_rules_folder`, and the editors of a project
 - [x] Interface checks through window snapshots (`REEL_EDITOR_SNAPSHOT`, with `REEL_EDITOR_FLOAT`, `REEL_EDITOR_APP_SETTINGS`, `REEL_EDITOR_SELECT`, `REEL_EDITOR_MCP`, `REEL_EDITOR_OPEN_MENU`, `REEL_EDITOR_DIRECT_SAY` and `REEL_EDITOR_RULES` to open a state at launch) for the editor, dark mode, 80% zoom, the cards, the menus and the panel
 - [ ] Hands on checks that snapshots cannot make - trackpad pinch and Cmd or Ctrl scroll on the timeline, dragging the dividers, dragging and stretching animation blocks, the video's place while the window is zoomed, and the spring of each card
-- [ ] Hands on checks of 2 Nov 2026 - the timeline scrolling up and down with the names following and its sideways bar at the bottom, the side chat's divider, Stop in the chat, a comment going to the chat, clip heads dragged to reorder, switching projects while a chat's Claude works, a notification's click, the shimmer while Claude reads, and the editing buttons coming back when it finishes
+- [ ] Hands on checks of 2 Nov 2026 - the timeline scrolling up and down with the names following and its sideways bar at the bottom, the side chat's divider, Stop in the chat, a comment going to the chat, clip heads dragged to reorder, switching projects while a chat's Claude works, a notification's click, the shimmer while Claude reads, and the editing buttons coming back when it finishes, the Voice card at 200% heard in the preview, the thin scroll bars in the transcript, chat and timeline, a click on the caption in the preview, cards scrolling at 60% of the window, and the app reopening on the project in front
 - [ ] Automated interface tests - none exist; `swift test` finds no tests
 - [ ] A long project from start to export in the Mac app alone, compared with the web editor's export of the same edits
 
@@ -192,6 +192,14 @@
 **Issue**: A running Claude Code session keeps the `reel-mcp` it started with, so a rebuild of the app does not reach it
 **Fix**: `/mcp` and reconnect `reel-editor`, or restart the session
 **Impact**: Sessions started before a rebuild miss new tools until they reconnect
+
+**Issue**: Some of 2 Nov 2026's work is checked in exports and snapshots, not by hand - text layers and caption entrances in the preview while playing, the voice boost heard in the preview, and hover and click on the caption in the preview
+**Fix**: Sankalp tries each one (Phase 11c and Phase 12 hands on checks); exports were measured and looked at frame by frame
+**Impact**: Low; the preview and the export draw captions and run the voice gain with the same code
+
+**Issue**: Notifications for a transcription or an export only come for projects open in a tab, which is where the app watches their status
+**Fix**: Keep the project's tab open while a long job runs, or ask the chat to report when it is done
+**Impact**: Low
 
 **Issue**: The direct chat spends tokens from the account picked, and each limits check costs about 2,000 tokens on Haiku
 **Fix**: Checks run at most every 20 minutes per account; every turn's cost is logged as `direct_chat_turn`
