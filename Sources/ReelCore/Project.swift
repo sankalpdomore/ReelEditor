@@ -93,6 +93,11 @@ public enum Store {
   }
   public static func file(_ name: String, _ f: String) -> URL { dir(name).appendingPathComponent(f) }
 
+  // A project's chat history, beside its document as <name>-chat-history.json (Sankalp, 2 Nov 2026): the messages and
+  // what the chat used. It moves with the document when the project is renamed or moved to another folder.
+  public static let CHAT_SUFFIX = "-chat-history.json"
+  public static func chatHistory(_ name: String) -> URL? { document(name).map { $0.deletingLastPathComponent().appendingPathComponent(name + CHAT_SUFFIX) } }
+
   // The project's document, where it was saved.
   public static func document(_ name: String) -> URL? { registry()[name].map { URL(fileURLWithPath: $0.path) } }
   public static func exportsDir(_ name: String) -> URL {
@@ -576,6 +581,9 @@ public enum Store {
     }
     let oldCache = cacheRoot.appendingPathComponent(name), newCache = cacheRoot.appendingPathComponent(next)
     if fm.fileExists(atPath: oldCache.path) && !fm.fileExists(atPath: newCache.path) { try? fm.moveItem(at: oldCache, to: newCache) }
+    // The chat history beside the document takes the new name too.
+    let oldChat = from.deletingLastPathComponent().appendingPathComponent(name + CHAT_SUFFIX), newChat = to.deletingLastPathComponent().appendingPathComponent(next + CHAT_SUFFIX)
+    if fm.fileExists(atPath: oldChat.path) && !fm.fileExists(atPath: newChat.path) { try? fm.moveItem(at: oldChat, to: newChat) }
     // The old file now that the copy is in use: to the Trash, or removed where there is no Trash.
     // REEL_NO_TRASH (the test suite) removes it instead, so scratch projects never fill the Trash.
     if ProcessInfo.processInfo.environment["REEL_NO_TRASH"] != nil { try? fm.removeItem(at: from) }
@@ -605,6 +613,9 @@ public enum Store {
         catch { try? fm.moveItem(at: to, to: from); throw error }
       }
     }
+    // The chat history goes with it.
+    let chatFrom = from.deletingLastPathComponent().appendingPathComponent(name + CHAT_SUFFIX), chatTo = folder.standardizedFileURL.appendingPathComponent(name + CHAT_SUFFIX)
+    if fm.fileExists(atPath: chatFrom.path) && !fm.fileExists(atPath: chatTo.path) { try? fm.moveItem(at: chatFrom, to: chatTo) }
     Log.write("core", "move_project", extra: ["project": .string(name), "from": .string(from.path), "to": .string(to.path)])
     return (from, to)
   }

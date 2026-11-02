@@ -279,7 +279,7 @@ struct TimelineTile: View {
           }
         }
         ctx.stroke(Path(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), cornerRadius: 8), with: .color(Ink.border), lineWidth: 1)
-        let label = "\(c.id). \(c.clip.label ?? (c.source == MAIN ? "main" : c.source))"
+        let label = "\(clipName(c.id)), \(c.clip.label ?? (c.source == MAIN ? "main" : c.source))"
         if r.minX >= -1 {
           let tag = ctx.resolve(Text(label).font(.inter(12, .medium)).foregroundStyle(.white))
           let ts = tag.measure(in: CGSize(width: max(0, r.width - 16), height: 20))

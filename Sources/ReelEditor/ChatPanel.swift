@@ -33,9 +33,15 @@ struct ChatPanel: View {
             // The conversation as one timeline (Sankalp, 2 Nov 2026): every row's icon in one column joined by a line, the
             // time on the right, and a run of the same tool folded into one row with what each call worked on.
             let items = ChatItem.group(direct.messages)
-            ForEach(items) { item in ChatItemRow(item: item, last: item.id == items.last?.id && direct.state != "thinking").id(item.id) }
+            // The line joins one run of Claude's messages and tool calls only: it stops at the row before each of Sankalp's
+            // messages and starts again at the icon after it, and none runs past his message (Sankalp, 2 Nov 2026).
+            let you = items.map { $0.first.role == "you" }
+            ForEach(Array(items.enumerated()), id: \.element.id) { k, item in
+              let end = k == items.count - 1 ? direct.state != "thinking" : you[k + 1]
+              ChatItemRow(item: item, last: end, first: k == 0 || you[k - 1]).id(item.id)
+            }
             if direct.state == "thinking" {
-              TimelineRow(last: true, time: nil) {
+              TimelineRow(last: true, first: you.last ?? true, time: nil) {
                 Spinner(size: 12)
               } content: {
                 Text(model?.agentFocus.map { TranscriptView.label($0) + ", " + TranscriptView.span($0) } ?? "Claude is working")
@@ -204,7 +210,8 @@ struct RulesRow: View {
 // A row of the chat's timeline: its icon in the left column, centred on the column the Claude mark sits in, with the line
 // down to the next row; then the row itself; then the time it happened.
 struct TimelineRow<Mark: View, Content: View>: View {
-  var last: Bool
+  var last: Bool // the line ends at this row's icon
+  var first = false // the line starts at this row's icon, not from above it
   var time: Date?
   var markTop: CGFloat = 2 // where the icon sits, to line up with the row's first line
   var hasMark = true // false for Sankalp's own messages, whose icon is on the right with them; the line runs past
@@ -214,7 +221,12 @@ struct TimelineRow<Mark: View, Content: View>: View {
   var body: some View {
     HStack(alignment: .top, spacing: 8) {
       ZStack(alignment: .top) {
-        if !last { Rectangle().fill(Ink.border).frame(width: 1).frame(maxHeight: .infinity).padding(.top, markTop + 8).padding(.bottom, -12) }
+        // The line runs through a run of Claude's rows, behind each icon's white circle: into the last one only as far as
+        // its icon, out of the first one only from below its icon, and never through one of Sankalp's messages.
+        if hasMark && !(first && last) {
+          if last { Rectangle().fill(Ink.border).frame(width: 1, height: markTop + 2) }
+          else { Rectangle().fill(Ink.border).frame(width: 1).frame(maxHeight: .infinity).padding(.top, first ? markTop + 8 : 0).padding(.bottom, -12) }
+        }
         if hasMark { mark().frame(width: 16, height: 16).background(Circle().fill(Ink.page)).padding(.top, markTop) }
       }
       .frame(width: 16).frame(maxHeight: .infinity, alignment: .top)
@@ -246,7 +258,8 @@ struct ChatItem: Identifiable {
 
 struct ChatItemRow: View {
   let item: ChatItem
-  let last: Bool
+  let last: Bool // the line ends at this row's icon
+  var first = false // the line starts at this row's icon
   @State private var open = false
 
   var body: some View {
@@ -254,7 +267,7 @@ struct ChatItemRow: View {
     switch m.role {
     case "activity":
       let n = item.messages.count
-      TimelineRow(last: last, time: item.messages.last?.t) {
+      TimelineRow(last: last, first: first, time: item.messages.last?.t) {
         Icon(Self.icon(m.tool), size: 12).foregroundStyle(Ink.muted)
       } content: {
         VStack(alignment: .leading, spacing: 4) {
@@ -284,19 +297,19 @@ struct ChatItemRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
       }
     case "rules":
-      TimelineRow(last: last, time: m.t) { Icon("book-open-text", size: 12).foregroundStyle(Ink.muted) } content: {
+      TimelineRow(last: last, first: first, time: m.t) { Icon("book-open-text", size: 12).foregroundStyle(Ink.muted) } content: {
         Text(m.text).font(.inter(12)).foregroundStyle(Ink.faint).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
           .contentShape(Rectangle()).onTapGesture { AppModel.shared.openRules() }
           .help("Read the rule books")
       }
     case "error":
-      TimelineRow(last: last, time: m.t) { Icon("warning-circle", size: 12).foregroundStyle(Ink.red) } content: {
+      TimelineRow(last: last, first: first, time: m.t) { Icon("warning-circle", size: 12).foregroundStyle(Ink.red) } content: {
         Text(m.text).font(.inter(12)).foregroundStyle(Ink.red).frame(maxWidth: .infinity, alignment: .leading)
       }
     // Sankalp's messages on the right with his icon beside them, and Claude's on the left; the time of each under its
     // bubble (Sankalp, 2 Nov 2026).
     case "you":
-      TimelineRow(last: last, time: nil, markTop: 12, hasMark: false) { EmptyView() } content: {
+      TimelineRow(last: last, first: first, time: nil, markTop: 12, hasMark: false) { EmptyView() } content: {
         // Each bubble is at most 80% of the chat's width (Sankalp, 2 Nov 2026).
         VStack(alignment: .trailing, spacing: 4) {
           HStack(alignment: .top, spacing: 8) {
@@ -313,7 +326,7 @@ struct ChatItemRow: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
       }
     default:
-      TimelineRow(last: last, time: nil, markTop: 12) { BrandMark(name: "claude", size: 16) } content: {
+      TimelineRow(last: last, first: first, time: nil, markTop: 12) { BrandMark(name: "claude", size: 16) } content: {
         VStack(alignment: .leading, spacing: 4) {
           WidthShare(share: 0.8) {
             MarkdownBlocks(text: m.text).textSelection(.enabled)

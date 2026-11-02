@@ -381,7 +381,7 @@ struct ClipHeader: View {
       Icon(p.source == MAIN ? "film-strip" : "film-slate", size: 14).foregroundStyle(Ink.muted)
       Text(p.label).font(.inter(13, .semibold)).foregroundStyle(Ink.strong).lineLimit(1).truncationMode(.middle)
       if let c {
-        Text("\(p.clip), \(Self.time(c.inn)) to \(Self.time(c.out)) of the video, \(Self.time(c.length)) long")
+        Text("\(clipName(p.clip)), \(Self.time(c.inn)) to \(Self.time(c.out)) of the video, \(Self.time(c.length)) long")
           .font(.inter(12)).foregroundStyle(Ink.faint).lineLimit(1)
       }
       Spacer(minLength: 0)
@@ -408,3 +408,7 @@ struct ClipHeader: View {
   // Under a minute in tenths of a second, 4.5 s; longer as minutes and seconds, 2:05.
   static func time(_ t: Double) -> String { t < 60 ? String(format: "%.1f s", t) : timecode(t).components(separatedBy: ".")[0] }
 }
+
+// A clip as people read it (Sankalp, 2 Nov 2026): Clip 5 for the clip the tools call c5. The number is the clip's own and
+// stays with it when clips are moved, so what is on screen always matches what Claude and the tools mean.
+func clipName(_ id: String) -> String { id.hasPrefix("c") && Int(id.dropFirst()) != nil ? "Clip \(id.dropFirst())" : id }

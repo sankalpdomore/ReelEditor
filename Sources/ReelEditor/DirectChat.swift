@@ -7,7 +7,8 @@
 // Each project has a chat of its own (Sankalp, 2 Nov 2026): a new project opens on a fresh chat, and going back to a
 // project shows its conversation again. Each one has its own Claude, started with its first message and kept while the
 // project's tab is open, so a Claude still working on one project carries on while another is in front. A project's
-// conversation and what it used are kept in its cache folder (_cache/<name>/chat.json and chat-usage.json), and the chat
+// conversation and what it used are kept beside its project file as <name>-chat-history.json (before 2 Nov 2026 in its
+// cache folder, moved from there on first load), and the chat
 // shown with no project open in _chat/direct.json.
 import AppKit
 import ReelCore
@@ -63,17 +64,34 @@ struct ChatUsage: Codable, Equatable {
   var queuedComments: [(shown: String, extra: String)] = []
 
   var project: String? { key.isEmpty ? nil : key }
+  // A project's chat is kept beside its project file, <name>-chat-history.json, the messages and what the chat used in one
+  // file (Sankalp, 2 Nov 2026); the chat with no project open stays in _chat. Chats kept in the cache folder before that
+  // are read once and moved there.
+  struct History: Codable { var messages: [DirectMessage]; var usage: ChatUsage }
+  var history: URL? { key.isEmpty ? nil : Store.chatHistory(key) }
   var file: URL { key.isEmpty ? Store.root.appendingPathComponent("_chat/direct.json") : Store.file(key, "chat.json") }
   var usageFile: URL { key.isEmpty ? Store.root.appendingPathComponent("_chat/direct-usage.json") : Store.file(key, "chat-usage.json") }
 
   init(_ key: String) {
     self.key = key
+    if let h = history, let d = try? Data(contentsOf: h), let saved = try? JSONDecoder().decode(History.self, from: d) {
+      messages = saved.messages; usage = saved.usage
+      return
+    }
     messages = (try? JSONDecoder().decode([DirectMessage].self, from: Data(contentsOf: file))) ?? []
     usage = (try? JSONDecoder().decode(ChatUsage.self, from: Data(contentsOf: usageFile))) ?? ChatUsage()
+    if history != nil && (!messages.isEmpty || usage.turns > 0) { save() } // an older chat moved beside the project
   }
 
   func save() {
-    try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let fm = FileManager.default
+    if let h = history {
+      let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+      guard (try? enc.encode(History(messages: Array(messages.suffix(400)), usage: usage)).write(to: h, options: .atomic)) != nil else { return }
+      try? fm.removeItem(at: file); try? fm.removeItem(at: usageFile) // the old place, once the new one is written
+      return
+    }
+    try? fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
     try? JSONEncoder().encode(Array(messages.suffix(400))).write(to: file, options: .atomic)
     try? JSONEncoder().encode(usage).write(to: usageFile, options: .atomic)
   }
@@ -249,7 +267,8 @@ struct ChatUsage: Codable, Equatable {
   comes in, where they sit, the widest line and words a line) is set with set_caption_style and read with \
   get_caption_style; hide_captions and show_captions hide them over a stretch, words or a clip. Text layers go on the \
   Animation layer with add_text_layer (for a part of the reel or whole true), styled the same way, with enter and exit \
-  motions; update_text_layer changes one. list_fonts lists the fonts.
+  motions; update_text_layer changes one. list_fonts lists the fonts. When you talk about a clip, call it clip 5 for \
+  the clip the tools call c5, as the app shows it, never c5.
   """
 
   // Starts the Claude of a project's chat (the one in front unless given), with that project's rule books.

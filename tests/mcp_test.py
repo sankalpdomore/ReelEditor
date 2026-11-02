@@ -823,12 +823,15 @@ bad("get_words", {"project": "multi", "video": "s9"}, "not_found", "get_words of
 # output is read from its file, not looked for in the project's document ("has no words").
 ok("create_project", {"videos": [os.path.join(MEDIA, "silent.mp4"), os.path.join(MEDIA, "test.mp4")], "order": "given", "name": "silent-first", "transcribe": False}, "create_project, the first video silent")
 r = ok("transcribe", {"project": "silent-first", "wait": True}, "transcribe every video, the first silent")
-check("transcribe goes on to the videos after a silent first one", r.get("done") == ["test.mp4"] and r.get("failed") == [] and r.get("words", 0) > 0, r)
-check("the words of the added video are kept in the project's file", any(doc("silent-first").get("words", {}).values()), list(doc("silent-first").get("words", {}).keys()))
+# The test video has no real speech, so WhisperX hears none or a word it makes up, and how many varies from run to run:
+# what is checked is that it went on past the silent first video and kept what it heard, not how much.
+check("transcribe goes on to the videos after a silent first one", r.get("done") == ["test.mp4"] and r.get("failed") == [] and r.get("words", -1) >= 0, r)
+check("the words of the added video are kept in the project's file", len(doc("silent-first").get("words", {})) == 1, list(doc("silent-first").get("words", {}).keys()))
 check("transcribe leaves no working files behind", not [f for f in os.listdir(os.path.join(HOME, "_cache", "silent-first", "media")) if f.startswith(("whisperx-", "audio-"))], os.listdir(os.path.join(HOME, "_cache", "silent-first", "media")))
 check("get_status says how many words came from which videos", "words from 1 of 1 video" in ok("get_status", {"project": "silent-first"}).get("message", ""), ok("get_status", {"project": "silent-first"}))
-r = ok("get_words", {"project": "silent-first", "video": "s1", "limit": 3}, "get_words of the transcribed video")
-check("the added video's words are read", r.get("file") == "test.mp4" and len(r.get("text", "")) > 0, r)
+if any(len(v.get("words", [])) for v in doc("silent-first").get("words", {}).values()):
+    r = ok("get_words", {"project": "silent-first", "video": "s1", "limit": 3}, "get_words of the transcribed video")
+    check("the added video's words are read", r.get("file") == "test.mp4" and len(r.get("text", "")) > 0, r)
 bad("transcribe", {"project": "silent-first", "wait": True}, "no_audio", "transcribe again when the silent video is all that is left")
 # Who edited a project, kept in the app's folder for it.
 ed = json.load(open(os.path.join(HOME, "_cache", B, "editors.json")))

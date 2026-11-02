@@ -55,7 +55,7 @@ struct FloatingLayer: View {
       return (a.map { k in ANIMATION_KINDS.first { $0.id == k.kind }?.title ?? k.kind } ?? "Animation", "magic-wand")
     case .clip(let id):
       let c = model.plan.clips.first { $0.id == id }
-      return ("Clip \(id)\(c.map { ", " + ($0.clip.label ?? ($0.source == MAIN ? model.loaded.project.main.label : $0.source)) } ?? "")", "film-strip")
+      return ("\(clipName(id))\(c.map { ", " + ($0.clip.label ?? ($0.source == MAIN ? model.loaded.project.main.label : $0.source)) } ?? "")", "film-strip")
     case .captions: return ("Captions", "closed-captioning")
     case .voice: return ("Voice", "speaker-high")
     case .overlay(let id):
