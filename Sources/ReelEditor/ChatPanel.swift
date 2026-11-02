@@ -143,8 +143,9 @@ struct DirectHeader<Accessory: View>: View {
         Text(["off": "Starts with your first message", "starting": "Starting Claude", "ready": "Ready", "thinking": "Working"][direct.state] ?? direct.state)
           .font(.inter(12)).foregroundStyle(Ink.faint)
         Spacer()
-        if direct.state != "off" { Button("Stop") { direct.stop() }.pill(.ghost, .xs) }
-        if !direct.messages.isEmpty { Button("Clear") { direct.clear() }.pill(.ghost, .xs) }
+        // Each action with its icon, so it reads at a glance (Sankalp, 2 Nov 2026).
+        if direct.state != "off" { Button { direct.stop() } label: { IconLabel("Stop", icon: "stop-circle", size: 12) }.pill(.ghost, .xs).fixedSize().help("End this project's Claude; your next message starts a new one") }
+        if !direct.messages.isEmpty { Button { direct.clear() } label: { IconLabel("Clear", icon: "eraser", size: 12) }.pill(.ghost, .xs).fixedSize().help("Clear this project's chat") }
       }
       Hairline().padding(.horizontal, -16)
       RulesRow(direct: direct, app: AppModel.shared)
@@ -154,27 +155,34 @@ struct DirectHeader<Accessory: View>: View {
   }
 }
 
-// The rule books Claude starts each conversation with: how many, which opens them to read in a modal, from which
-// folder, a folder picked in Finder or the default again, and the folder shown in Finder.
+// The rule books Claude starts each conversation with: how many, which opens them to read in a modal, a folder picked in
+// Finder or the default again, and the folder shown in Finder, on one row; the folder's path on its own line under it
+// (Sankalp, 2 Nov 2026).
 struct RulesRow: View {
   @ObservedObject var direct: DirectChat
   @ObservedObject var app: AppModel // the project in front: each project keeps its own rules folder
   var body: some View {
-    HStack(spacing: 8) {
-      // The count opens the rule books in a modal, to read each one.
-      Button { app.openRules() } label: {
-        IconLabel("\(direct.rules.count) rule \(direct.rules.count == 1 ? "book" : "books")", icon: "book-open-text", size: 14).fixedSize()
+    VStack(alignment: .leading, spacing: 0) {
+      HStack(spacing: 8) {
+        // The count opens the rule books in a modal, to read each one.
+        Button { app.openRules() } label: {
+          IconLabel("\(direct.rules.count) rule \(direct.rules.count == 1 ? "book" : "books")", icon: "book-open-text", size: 14).fixedSize()
+        }
+        .pill(.ghost, .xs).padding(.leading, -12)
+        .help("Read this project's rule books")
+        Spacer(minLength: 4)
+        Button { choose() } label: { IconLabel("Change", icon: "folder-simple-plus", size: 12) }.pill(.ghost, .xs).fixedSize()
+          .help("Read this project's rule books from another folder. New projects start with it too.")
+        if !Rules.isDefault(URL(fileURLWithPath: direct.rulesDir)) {
+          Button { direct.setRulesFolder(nil) } label: { IconLabel("Default", icon: "arrow-counter-clockwise", size: 12) }.pill(.ghost, .xs).fixedSize()
+            .help("Read this project's rule books from the Reel Editor folder's _rules")
+        }
+        Button { NSWorkspace.shared.open(URL(fileURLWithPath: direct.rulesDir)) } label: { Icon("folder-open", size: 12) }.pill(.ghost, .iconSm)
+          .help("Show the rules folder in Finder")
       }
-      .pill(.ghost, .xs).padding(.leading, -12)
-      .help("Read this project's rule books")
       Text(direct.rulesDir.replacingOccurrences(of: NSHomeDirectory(), with: "~")).font(.inter(12)).foregroundStyle(Ink.faint)
-        .lineLimit(1).truncationMode(.middle).layoutPriority(-1)
+        .lineLimit(1).truncationMode(.middle)
         .help(direct.rulesDir)
-      Spacer(minLength: 4)
-      Button("Change") { choose() }.pill(.ghost, .xs).fixedSize().help("Read this project's rule books from another folder. New projects start with it too.")
-      if !Rules.isDefault(URL(fileURLWithPath: direct.rulesDir)) { Button("Default") { direct.setRulesFolder(nil) }.pill(.ghost, .xs).fixedSize().help("Read this project's rule books from the Reel Editor folder's _rules") }
-      Button { NSWorkspace.shared.open(URL(fileURLWithPath: direct.rulesDir)) } label: { Icon("folder-open", size: 12) }.pill(.ghost, .iconSm)
-        .help("Show the rules folder in Finder")
     }
     .onAppear { direct.reloadRules() }
     .onChange(of: app.selected) { _, _ in direct.reloadRules() }

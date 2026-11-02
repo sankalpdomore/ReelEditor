@@ -111,7 +111,9 @@ public struct Edl: Codable, Equatable, Sendable {
   public var music: MusicSettings? = nil // the music bed (set_music)
   public var voiceGain: Double? = nil // all the voices together, 0 to 10, 1 (nil) is as recorded
   public var voiceEq: AudioEq? = nil // the bass and treble of all the voices together
-  public var captionPos: CaptionPos? = nil // where this reel's captions sit
+  public var captionPos: CaptionPos? = nil // where this reel's captions sat before caption styles; captionStyle's x and y now
+  public var captionStyle: TextStyle? = nil // the captions' own look, laid over the default (Captions.swift); part of undo
+  public var captionHides: [CaptionHide]? = nil // stretches with no captions, edit seconds; part of undo
   public var caption: String? = nil // the caption to post with the reel
   public var status: String? = nil // draft (nil) or live
   public var references: [ReelReference]? = nil // the documents the reel is made from

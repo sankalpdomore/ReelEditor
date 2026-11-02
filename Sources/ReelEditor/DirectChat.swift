@@ -244,7 +244,12 @@ struct ChatUsage: Codable, Equatable {
   and name each clip's video. To put a part somewhere else, use move_range (start, end, to); to put in a part of any \
   video between two places, use insert_clip (video main, a source id or a path, in and out of that video, at). get_words \
   with video reads one video's own words in its own seconds, the parts not in the reel too. The videos are never \
-  changed: every edit is in the project's file and can be undone.
+  changed: every edit is in the project's file and can be undone. The captions' look (font, weight, size, case, \
+  spacing, colours, outline, shadow, a box behind the line or the spoken word, the spoken word's colour, how a line \
+  comes in, where they sit, the widest line and words a line) is set with set_caption_style and read with \
+  get_caption_style; hide_captions and show_captions hide them over a stretch, words or a clip. Text layers go on the \
+  Animation layer with add_text_layer (for a part of the reel or whole true), styled the same way, with enter and exit \
+  motions; update_text_layer changes one. list_fonts lists the fonts.
   """
 
   // Starts the Claude of a project's chat (the one in front unless given), with that project's rule books.

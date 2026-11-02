@@ -89,6 +89,7 @@ struct TranscriptView: View {
           .coordinateSpace(.named("words"))
           // Drag across words to select them, as in the web editor; the menu then floats above the first one.
           .simultaneousGesture(DragGesture(minimumDistance: 4, coordinateSpace: .named("words")).onChanged { g in
+            guard !model.claudeEditing else { return } // nothing is selected while Claude edits (Sankalp, 2 Nov 2026)
             guard let a = wordAt(g.startLocation), var b = wordAt(g.location) else { return }
             // A selection stays among one kind of word: the project's own video's, or another video's.
             if (a >= model.mainWordCount) != (b >= model.mainWordCount) { b = a }
@@ -157,7 +158,7 @@ extension TranscriptView {
 
   // The selection menu, above the first selected word, or below the last when there is no room above.
   @ViewBuilder var menu: some View {
-    if let r = model.selectedWords, let first = frames.rects[r.lowerBound] {
+    if !model.claudeEditing, let r = model.selectedWords, let first = frames.rects[r.lowerBound] {
       let sel = model.words[r]
       let below = first.minY < 56
       let y = below ? (frames.rects[r.upperBound]?.maxY ?? first.maxY) + 8 : first.minY - 52
@@ -254,17 +255,20 @@ struct WordChip: View {
 
   var body: some View {
     let selected = model.selectedWords?.contains(w.id) == true
-    let current = model.currentWord == w.id
+    // The word at the playhead in white on black, so it stands out as the video plays (Sankalp, 2 Nov 2026).
+    let current = model.currentWord == w.id && !selected
     Text(w.text)
       .font(.inter(TRANSCRIPT_SIZE))
       .strikethrough(w.cut, color: w.pending ? Ink.amber : Ink.red)
-      .foregroundStyle(w.pending ? Ink.amber : w.cut ? Ink.ghost : current ? Ink.strong : Ink.text)
+      .foregroundStyle(current ? Ink.onPrimary : w.pending ? Ink.amber : w.cut ? Ink.ghost : Ink.text)
       .padding(.horizontal, TRANSCRIPT_WORD_PAD)
-      .background(RoundedRectangle(cornerRadius: 4).fill(selected ? Ink.select : w.pending ? Ink.amber.opacity(0.1) : current ? Ink.shell : hover ? Ink.sunken : .clear))
+      .background(RoundedRectangle(cornerRadius: 4).fill(selected ? Ink.select : current ? Ink.strong : w.pending ? Ink.amber.opacity(0.1) : hover ? Ink.sunken : .clear))
       .help(w.pending ? "Cut from the chat, waiting for your approval" : "")
       .onHover { hover = $0 }
       .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("words")) }) { [frames, id = w.id] r in frames.rects[id] = r }
       .onTapGesture {
+        // While Claude edits a click only moves the playhead: no selection, so no Cut or Comment (Sankalp, 2 Nov 2026).
+        if model.claudeEditing { if let s = w.s { model.seek(s) }; return }
         if NSEvent.modifierFlags.contains(.shift), let r = model.selectedWords {
           model.selectedWords = min(r.lowerBound, w.id)...max(r.upperBound, w.id)
         } else {

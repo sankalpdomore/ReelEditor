@@ -163,7 +163,7 @@ func videoLines(_ l: Loaded, video: String, from: Double, to: Double?, limit: In
   else if let s = edl.sources.first(where: { $0.id == video }) { words = l.extra.sources[video] ?? []; label = s.label }
   else { throw ToolError("not_found", "No video \(video). The project's videos are main\(edl.sources.map { ", \($0.id) (\($0.label))" }.joined())") }
   let f = { (x: Double) in String(format: "%.2f", x) }
-  var lines: [String] = [], shown = 0, next: Double? = nil
+  var lines: [String] = [], shown = 0, next: Double? = nil, first: Double? = nil, last: Double? = nil
   for (k, w) in words.enumerated() where w.e > from {
     if let to, w.s >= to { break }
     if shown >= limit { next = w.s; break }
@@ -171,12 +171,15 @@ func videoLines(_ l: Loaded, video: String, from: Double, to: Double?, limit: In
     let at = plan.clips.first { $0.source == video && mid >= $0.inn && mid < $0.out }.map { $0.editStart + mid - $0.inn }
     let idx = video == MAIN ? "\(k) " : ""
     lines.append("\(idx)\(f(w.s)) \(f(w.e)) \(w.w)\(at.map { " [in the reel at \(f($0))]" } ?? " [not in the reel]")")
+    if let at { first = first ?? at; last = at }
     shown += 1
   }
   var out: [String: JSON] = ["project": .string(l.project.name), "video": .string(video), "file": .string(label), "shown": .number(Double(shown)),
                              "format": .string((video == MAIN ? "index " : "") + "start end word, in seconds of this video; insert_clip with this video and in and out puts a part in the reel"),
                              "text": .string(lines.joined(separator: "\n"))]
   if let next { out["nextFrom"] = .number(round3(next)) }
+  // Where the words shown play in the reel, first to last, so the app lights up only what was read.
+  if let first, let last { out["reelFrom"] = .number(round3(first)); out["reelTo"] = .number(round3(last)) }
   return .object(out)
 }
 
@@ -235,7 +238,8 @@ let auditTools: [ReelTool] = [
     guard !l.words.isEmpty || !l.extra.isEmpty else { throw ToolError("no_words", "This project has no transcript yet. Run transcribe first.") }
     if let v = i["video"]?.string {
       let page = try videoLines(l, video: v, from: i["from"]?.double ?? 0, to: i["to"]?.double, limit: i["limit"]?.int ?? 1500)
-      if let c = l.plan.clips.first(where: { $0.source == v }) { Focus.set(l.project.name, "Reading \(page["file"]?.string ?? v)", c.editStart, c.editEnd) }
+      // Only the part of the reel the words shown play in lights up, not every clip of the video (Sankalp, 2 Nov 2026).
+      if let a = page["reelFrom"]?.double, let b = page["reelTo"]?.double { Focus.set(l.project.name, "Reading \(page["file"]?.string ?? v)", a, b + 0.3) }
       return page
     }
     let start = i["start"]?.int, limit = i["limit"]?.int ?? 1500

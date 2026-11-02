@@ -18,6 +18,10 @@ public struct ReelAnimation: Codable, Equatable, Sendable {
   public var to: Double? = nil
   public var prefix: String? = nil
   public var suffix: String? = nil
+  // A text layer's own look and its motions in and out (kind text, Captions.swift).
+  public var style: TextStyle? = nil
+  public var enter: String? = nil
+  public var exit: String? = nil
 
   public init(id: String = "", kind: String, start: Double, end: Double, side: String = "right", position: String = "middle") {
     self.id = id; self.kind = kind; self.start = start; self.end = end; self.side = side; self.position = position
@@ -47,6 +51,7 @@ public let ANIMATION_KINDS: [AnimationKind] = [
   AnimationKind(id: "emoji-burst", title: "Emoji burst", description: "A handful of emoji that float up and fade, staggered. emoji is the character (default 🔥).", fields: ["emoji"], defaultLength: 2),
   AnimationKind(id: "progress-bar", title: "Progress bar", description: "A bar that fills over its span up to `to` percent (default 100), with text as its label.", fields: ["text", "to", "color"], defaultLength: 3),
   AnimationKind(id: "callout", title: "Callout", description: "A speech bubble with text, pointing toward the speaker, that pops in with a small bounce.", fields: ["text", "color"], defaultLength: 3),
+  AnimationKind(id: "text", title: "Text", description: "A text layer: text is its words (on more than one line too), in its own style (font, weight, size, colour, outline, shadow, box, x and y, widest line, alignment, like the captions' style), coming in with enter (fade, pop, rise, drop, slide-left, slide-right, typewriter or none) and going out with exit (the same but typewriter). For a part of the reel or all of it. add_text_layer adds one.", fields: ["text", "style", "enter", "exit"], defaultLength: 3),
   AnimationKind(id: "checklist", title: "Checklist", description: "A list that ticks in one item at a time, evenly over the first two thirds of its span. text holds the items, one per line.", fields: ["text", "color"], defaultLength: 4),
 ]
 public let ANIMATION_KIND_IDS = ANIMATION_KINDS.map(\.id)

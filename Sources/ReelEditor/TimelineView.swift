@@ -82,7 +82,7 @@ struct TimelineView: View {
         .contentShape(Rectangle())
         .gesture(DragGesture(minimumDistance: 0).onChanged { g in
           let a = g.startLocation.x / model.zoom, b = g.location.x / model.zoom
-          if abs(g.translation.width) < 3 { return }
+          if abs(g.translation.width) < 3 || model.claudeEditing { return } // no range selected while Claude edits
           dragFrom = a
           model.selectedWords = nil
           model.selection = ReelCore.Range(s: max(0, min(a, b)), e: min(model.plan.editDuration, max(a, b)))
@@ -197,9 +197,15 @@ struct LaneNames: View {
         .offset(y: lanes.ruler.lowerBound)
       row("Animation", "magic-wand", lanes.anim)
       row("Video", "film-strip", lanes.video)
-      row("Audio", "waveform", lanes.audio)
+      // The Audio name opens the Voice card: how loud the voices are, up to 1000%, and their tone (Sankalp, 2 Nov 2026).
+      name("Audio", "waveform").frame(height: lanes.audio.upperBound - lanes.audio.lowerBound).offset(y: lanes.audio.lowerBound)
+        .onTapGesture(coordinateSpace: .named("editor")) { at in model.show(.voice, at: at) }
+        .help("Voice volume, up to 1000%, and its bass and treble")
       row("Voice and face", "microphone", lanes.voice)
-      row("Captions", "closed-captioning", lanes.words)
+      // The Captions name opens the Captions card: their look and where they are hidden (Sankalp, 2 Nov 2026).
+      name("Captions", "closed-captioning").frame(height: lanes.words.upperBound - lanes.words.lowerBound).offset(y: lanes.words.lowerBound)
+        .onTapGesture(coordinateSpace: .named("editor")) { at in model.show(.captions, at: at) }
+        .help("Caption style, and where the captions are hidden")
     }
     .frame(width: 160, height: lanes.height, alignment: .topLeading)
     .padding(.top, 0)
@@ -360,11 +366,15 @@ struct FocusBand: View {
   @State private var on = false
   var body: some View {
     if let f = model.agentFocus {
+      // The part Claude works on shimmers like its words in the transcript, and says so on hover (Sankalp, 2 Nov 2026).
       Rectangle().fill(Ink.focus.opacity(on ? 0.14 : 0.06))
+        .shimmer(true, onGlyphs: false)
+        .clipped()
         .overlay(Rectangle().stroke(Ink.focus.opacity(0.6), lineWidth: 1))
         .frame(width: max(2, (f.end - f.start) * model.zoom), height: lanes.words.upperBound - lanes.anim.lowerBound)
+        .contentShape(Rectangle())
+        .help("Claude is editing this part: \(f.action.lowercased()), \(timecode(f.start).components(separatedBy: ".")[0]) to \(timecode(f.end).components(separatedBy: ".")[0])")
         .offset(x: f.start * model.zoom, y: lanes.anim.lowerBound)
-        .allowsHitTesting(false)
         .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { on = true } }
     }
   }
@@ -390,7 +400,7 @@ struct RangeMenu: View {
   @Environment(\.lanes) private var lanes
   @ObservedObject var model: EditorModel
   var body: some View {
-    if let s = model.selection, s.e - s.s > 0.05 {
+    if !model.claudeEditing, let s = model.selection, s.e - s.s > 0.05 {
       SelectionMenu(canCut: true, canUncut: model.plan.cuts.contains { $0.e > s.s && $0.s < s.e },
         cut: { model.cutSelection() }, uncut: { model.restoreSelection() },
         comment: { t in

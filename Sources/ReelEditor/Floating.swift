@@ -15,13 +15,15 @@ struct FloatingLayer: View {
   var body: some View {
     if let f = model.floating {
       let below = f == .project || f == .chat
-      let width: CGFloat = f == .project ? 460 : f == .chat ? 420 : 380
+      let width: CGFloat = f == .project ? 460 : f == .chat ? 420 : f == .captions ? 420 : 380
       let at = below ? headAnchor : model.floatingAt
       let x = below ? max(16, at.x - width) : min(max(16, at.x - width / 2), size.width - width - 16)
       let room = below ? size.height - at.y - 24 : at.y - 24
       ZStack(alignment: below ? .topLeading : .bottomLeading) {
         Color.black.opacity(0.001).onTapGesture { model.closeFloating() }
-        FloatingCard(title: title(f), maxHeight: max(160, room), fixedHeight: below ? min(room, f == .chat ? 520 : 640) : nil, close: model.closeFloating) {
+        // At most 60% of the editor's height, scrolling past it (Sankalp, 2 Nov 2026).
+        let cap = size.height * CARD_SHARE
+        FloatingCard(title: title(f), maxHeight: min(max(160, room), cap), fixedHeight: below ? min(room, cap, f == .chat ? 520 : 640) : nil, close: model.closeFloating) {
           switch f {
           case .project: ProjectPanel(model: model)
           case .chat: ChatPanel(app: AppModel.shared, model: model)
@@ -31,6 +33,8 @@ struct FloatingLayer: View {
             } else { Note("This animation is gone.") }
           case .clip(let id): ClipSettings(model: model, clipId: id)
           case .overlay(let id): OverlaySettings(model: model, overlayId: id)
+          case .captions: CaptionsCard(model: model)
+          case .voice: VoiceCard(model: model)
           }
         }
         .frame(width: width)
@@ -52,6 +56,8 @@ struct FloatingLayer: View {
     case .clip(let id):
       let c = model.plan.clips.first { $0.id == id }
       return ("Clip \(id)\(c.map { ", " + ($0.clip.label ?? ($0.source == MAIN ? model.loaded.project.main.label : $0.source)) } ?? "")", "film-strip")
+    case .captions: return ("Captions", "closed-captioning")
+    case .voice: return ("Voice", "speaker-high")
     case .overlay(let id):
       let o = model.loaded.project.edits.audioOverlays?.first { $0.id == id }
       return ((o?.isFace == true ? "Face, " : "Voice over, ") + (o?.label ?? id), o?.isFace == true ? "user-square" : "waveform")

@@ -240,13 +240,20 @@ let webTools: [ReelTool] = [
       return ["titleText": e.titleText.map { .string($0) } ?? .null]
     }
   },
-  ReelTool(name: "set_caption_position", description: "Sets where this reel's captions sit: x and y are the middle of the captions in px of the 1080 by 1920 frame (1920 by 1080 for a landscape video), x from the frame's centre (0 is centred, minus is left) and y down from the top. reset true goes back to the fixed reel look's position. Used by the export and by the preview (Overlay.captionCenter). A setting, not an undo step.", inputSchema: obj([
+  ReelTool(name: "set_caption_position", description: "Sets where this reel's captions sit: x and y are the middle of the captions in px of the 1080 by 1920 frame (1920 by 1080 for a landscape video), x from the frame's centre (0 is centred, minus is left) and y down from the top. reset true goes back to the caption style's default place. The same as set_caption_style with x and y, saved in the caption style.", inputSchema: obj([
     "project": projectArg, "x": ["type": "number", "minimum": -1920, "maximum": 1920], "y": ["type": "number", "minimum": 0, "maximum": 1920], "reset": ["type": "boolean"],
   ], ["project"])) { i in
     try setting(i, "set_caption_position") { e in
-      if i["reset"]?.bool == true { e.captionPos = nil }
-      else { e.captionPos = CaptionPos(x: (i["x"]?.double ?? e.captionPos?.x ?? 0).rounded(), y: (i["y"]?.double ?? e.captionPos?.y ?? 1400).rounded()) }
-      return ["captionPos": e.captionPos.map { JSON.from($0) } ?? .null]
+      // Kept in the caption style since 2 Nov 2026; an older captionPos is folded into it.
+      var s = e.captionStyle ?? TextStyle()
+      if i["reset"]?.bool == true { s.x = nil; s.y = nil }
+      else {
+        s.x = (i["x"]?.double ?? s.x ?? e.captionPos?.x ?? 0).rounded()
+        s.y = (i["y"]?.double ?? s.y ?? e.captionPos?.y ?? Captions.builtIn(landscape: false).y ?? 1490).rounded()
+      }
+      e.captionPos = nil
+      e.captionStyle = s == TextStyle() ? nil : s
+      return ["captionPos": s.x.map { x in ["x": .number(x), "y": .number(s.y ?? 0)] } ?? .null]
     }
   },
   ReelTool(name: "set_voice_gain", description: "Sets how loud all the voices are together, against the music: the video clips' own sound and every voice over and face overlay (not the music or the sound effects), from 0 (silent) to 10 (1000 percent), 1 is as recorded. It plays in the preview and is applied in the export (above 1 the voice is limited so it does not clip). A setting, not an undo step.", inputSchema: obj([

@@ -15,8 +15,11 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
 @MainActor final class AppModel: ObservableObject {
   static let shared = AppModel()
   @Published private(set) var projects: [String] = []
-  @Published var tabs: [EditorTab] = [] { didSet { UserDefaults.standard.set(tabs.compactMap(\.project), forKey: Self.tabsKey); Self.chatFollows() } }
-  @Published var selected: UUID? { didSet { Self.chatFollows() } }
+  @Published var tabs: [EditorTab] = [] { didSet { UserDefaults.standard.set(tabs.compactMap(\.project), forKey: Self.tabsKey); Self.chatFollows(); rememberFront() } }
+  @Published var selected: UUID? { didSet { Self.chatFollows(); rememberFront() } }
+  // The project in front is remembered, so the app opens on it after a restart (Sankalp, 2 Nov 2026).
+  static let frontKey = "frontTab"
+  private func rememberFront() { if let p = current?.project { UserDefaults.standard.set(p, forKey: Self.frontKey) } }
   // Each project shows its own chat: told once the change is made (also from init, so never synchronously).
   static func chatFollows() { DispatchQueue.main.async { DirectChat.shared.frontChanged() } }
   @Published var error: String? { didSet { if let error { Log.error("app", error) } } }
@@ -28,6 +31,7 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
   @Published var mcpOpen = ProcessInfo.processInfo.environment["REEL_EDITOR_MCP"] != nil
   // The App settings card under its button at the right of the top bar. REEL_EDITOR_APP_SETTINGS=1 opens it, for a snapshot.
   @Published var settingsOpen = ProcessInfo.processInfo.environment["REEL_EDITOR_APP_SETTINGS"] != nil
+  @Published var exportWidth: CGFloat = 0 // Export at the right end of the top bar, which App settings sits left of
   // The rule books modal, opened from the rule book count in the chat, and the book shown in it (nil is the first).
   // REEL_EDITOR_RULES=1 opens it at launch, for a snapshot.
   @Published var rulesOpen = ProcessInfo.processInfo.environment["REEL_EDITOR_RULES"] != nil
@@ -71,7 +75,8 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
     projects = names
     let kept = (UserDefaults.standard.stringArray(forKey: Self.tabsKey) ?? []).filter { names.contains($0) }
     tabs = kept.isEmpty ? [EditorTab(project: nil)] : kept.map { EditorTab(project: $0) }
-    selected = tabs.first?.id
+    let front = UserDefaults.standard.string(forKey: Self.frontKey)
+    selected = (tabs.first { $0.project != nil && $0.project == front } ?? tabs.first)?.id
     mcp = liveSessions
     timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in MainActor.assumeIsolated { AppModel.shared.refresh() } }
     stateTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in MainActor.assumeIsolated { AppModel.shared.publishState() } }
@@ -341,7 +346,7 @@ enum TextKeys {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-  func applicationWillFinishLaunching(_ notification: Notification) { DesignFonts.register() }
+  func applicationWillFinishLaunching(_ notification: Notification) { DesignFonts.register(); ThinScrollers.install() }
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
     Theme.apply(UserDefaults.standard.string(forKey: Theme.key) ?? Theme.light.rawValue)
@@ -525,24 +530,30 @@ struct MainView: View {
     // App settings drop down from their button at the right of the top bar; a click anywhere else closes them.
     .overlay(alignment: .topTrailing) {
       if app.settingsOpen {
+        GeometryReader { g in
         ZStack(alignment: .topTrailing) {
           Color.black.opacity(0.001).onTapGesture { withAnimation(.cardClose) { app.settingsOpen = false } }
-          AppSettingsPanel(app: app)
+          AppSettingsPanel(app: app, maxHeight: g.size.height * CARD_SHARE)
             .overlay(alignment: .topTrailing) { MenuArrow().frame(width: 16, height: 8).offset(x: -24, y: -7) }
-            .padding(.top, 56).padding(.trailing, 20)
+            .padding(.top, 56).padding(.trailing, 20 + (app.exportWidth > 0 ? app.exportWidth + 16 : 0))
             .transition(.card(from: .topTrailing))
+        }
+        .frame(width: g.size.width, height: g.size.height, alignment: .topTrailing)
         }
       }
     }
     // The MCP details drop down from the pill, right aligned under it; a click anywhere else closes them.
     .overlay(alignment: .topTrailing) {
       if app.mcpOpen {
+        GeometryReader { g in
         ZStack(alignment: .topTrailing) {
           Color.black.opacity(0.001).onTapGesture { withAnimation(.cardClose) { app.mcpOpen = false } }
-          MCPDetails(app: app)
+          MCPDetails(app: app, maxHeight: g.size.height * CARD_SHARE)
             .overlay(alignment: .topTrailing) { MenuArrow().frame(width: 16, height: 8).offset(x: -16, y: -7) }
             .padding(.top, 56 + 40 + 8).padding(.trailing, 16)
             .transition(.card(from: .topTrailing))
+        }
+        .frame(width: g.size.width, height: g.size.height, alignment: .topTrailing)
         }
       }
     }
@@ -578,9 +589,11 @@ struct TopBar: View {
       }
       .layoutPriority(-1)
       Spacer(minLength: 16)
+      // The layouts, App settings, then Export at the right end (Sankalp, 2 Nov 2026).
       if let model { EditorActions(model: model) }
       Button { withAnimation(app.settingsOpen ? .cardClose : .cardOpen) { app.settingsOpen.toggle() } } label: { IconLabel("App settings", icon: "gear", size: 16) }
         .pill(.outline, .md, active: app.settingsOpen).help("The app's appearance and how agents connect")
+      if let model { ExportButton(model: model, app: app) }
     }
     .padding(.horizontal, 20)
     .frame(height: 56)
@@ -654,7 +667,7 @@ struct UndoRedo: View {
   }
 }
 
-// The right end of the top bar: Wide, Tall and Distraction free as tabs, then Export.
+// Wide, Tall and Distraction free as tabs, near the right end of the top bar.
 struct EditorActions: View {
   @ObservedObject var model: EditorModel
   @AppStorage("layoutLandscape") private var layoutLandscape = EditorLayout.wide.rawValue
@@ -674,6 +687,18 @@ struct EditorActions: View {
         if landscape { layoutLandscape = v } else { layoutPortrait = v }
         Log.write("app", "layout", args: ["layout": .string(v), "landscape": .bool(landscape)])
       }))
+    }
+  }
+}
+
+// Export, at the right end of the top bar, with its progress while it runs. Its width is kept so App settings, beside
+// it, opens its card right aligned under its own button.
+struct ExportButton: View {
+  @ObservedObject var model: EditorModel
+  @ObservedObject var app: AppModel
+
+  var body: some View {
+    Group {
       if model.status["state"]?.string == "exporting" {
         Button {} label: { HStack(spacing: 8) { Spinner(size: 14); Text("Exporting \(Int((model.status["progress"]?.double ?? 0) * 100))%") } }
           .pill(.outline, .md).disabled(true)
@@ -682,6 +707,9 @@ struct EditorActions: View {
           .pill(.primary, .md).help("Export an MP4 (Cmd E)")
       }
     }
+    .fixedSize()
+    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { app.exportWidth = $0 }
+    .onDisappear { app.exportWidth = 0 }
   }
 }
 
@@ -822,6 +850,7 @@ struct AppSettingsPanel: View {
   @ObservedObject var app: AppModel
   @AppStorage(Theme.key) private var theme = Theme.light.rawValue
   @AppStorage(Notify.key) private var notifications = true
+  var maxHeight: CGFloat = 800 // 60% of the window, the cards scrolling past it
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 8) {
@@ -830,15 +859,19 @@ struct AppSettingsPanel: View {
         Spacer()
         Button { withAnimation(.cardClose) { app.settingsOpen = false } } label: { Icon("x", size: 14) }.pill(.ghost, .iconSm).help("Close (Escape)")
       }
-      InsetCard(title: "Appearance", icon: "paint-brush") {
-        SegmentTabs(items: Theme.allCases.map { SegmentItem(value: $0.rawValue, label: $0.title) }, selection: $theme, fullWidth: true)
-      }
-      InsetCard(title: "Notifications", icon: "bell") {
-        Toggle("When a transcription or an export ends, and when Claude finishes in the chat", isOn: $notifications).toggleStyle(.pillSwitch)
-      }
-      InsetCard(title: "Agents (MCP)", icon: "plugs-connected") {
-        Note("Claude or any MCP client edits the same projects through the editor's tools, and this window follows along live. To add the tools to Claude Code:")
-        CommandBox(text: MCPDetails.command)
+      CappedScroll(maxHeight: maxHeight - 64) {
+        VStack(alignment: .leading, spacing: 12) {
+          InsetCard(title: "Appearance", icon: "paint-brush") {
+            SegmentTabs(items: Theme.allCases.map { SegmentItem(value: $0.rawValue, label: $0.title) }, selection: $theme, fullWidth: true)
+          }
+          InsetCard(title: "Notifications", icon: "bell") {
+            Toggle("When a transcription or an export ends, and when Claude finishes in the chat", isOn: $notifications).toggleStyle(.pillSwitch)
+          }
+          InsetCard(title: "Agents (MCP)", icon: "plugs-connected") {
+            Note("Claude or any MCP client edits the same projects through the editor's tools, and this window follows along live. To add the tools to Claude Code:")
+            CommandBox(text: MCPDetails.command)
+          }
+        }
       }
     }
     .padding(16)
@@ -852,6 +885,7 @@ struct MCPDetails: View {
   @ObservedObject private var limits = AccountLimits.shared
   @State private var usage: [Int32: TokenUsage] = [:]
   @State private var listHeight: CGFloat = 120 // the tree's own height, so the panel is only as tall as it needs
+  var maxHeight: CGFloat = 800 // 60% of the window, the list scrolling past it
   @AppStorage("mcpDetailsTab") private var tab = ProcessInfo.processInfo.environment["REEL_EDITOR_MCP"] ?? "editor" // This editor, or All sessions
   static let width: CGFloat = 420
 
@@ -911,7 +945,7 @@ struct MCPDetails: View {
           .padding(.vertical, 4)
           .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { listHeight = $0 }
         }
-        .frame(height: min(listHeight, 460))
+        .frame(height: min(listHeight, 460, max(120, maxHeight - 260)))
         Note("Limits are read as the LiveAssistant app reads them, one word on Haiku per account (about 2,000 tokens), at most every 20 minutes. This editor's part is an estimate: the account's use times its sessions' share of the tokens the account spent in that window. Every reading goes to the app's log.")
       }
     }

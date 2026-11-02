@@ -101,6 +101,7 @@ public enum ReelState {
       "pendingWords": JSON.from(edl.pendingWords ?? []), "waitingCuts": .number(Double(edl.cuts.filter { $0.pending == true }.count + (edl.pendingWords?.count ?? 0))),
       "look": edl.look.map { JSON.from($0) } ?? .null, "music": edl.music.map { JSON.from($0) } ?? .null, "musicFile": Compose.musicFile(edl).map { .string($0.path) } ?? .null,
       "voiceGain": .number(edl.voiceGain ?? 1), "voiceEq": edl.voiceEq.map { JSON.from($0) } ?? .null, "captionPos": edl.captionPos.map { JSON.from($0) } ?? .null,
+      "captionStyle": edl.captionStyle.map { JSON.from($0) } ?? .null, "captionHides": hideList(edl.captionHides ?? []),
       "caption": edl.caption.map { .string($0) } ?? .null, "status": .string(edl.status ?? "draft"), "references": JSON.from(edl.references ?? []), "cost": edl.cost.map { JSON.from($0) } ?? .null,
       "titleHides": .array(clipTitleHides(plan).map(r)), "comments": .number(Double(Comments.read(l.project.name).filter { $0.status == "unresolved" }.count)),
       "draft": .bool(Drafts.read(l.project.name) != nil),
@@ -147,6 +148,9 @@ private let animFields: [String: JSON] = [
   "emoji": ["type": "string", "maxLength": 8],
   "from": ["type": "number"], "to": ["type": "number"],
   "prefix": ["type": "string", "maxLength": 12], "suffix": ["type": "string", "maxLength": 12],
+  // A text layer's (kind text) own look and motions, as add_text_layer takes them (Sankalp, 2 Nov 2026).
+  "style": obj(styleFields),
+  "enter": motionFields["enter"]!, "exit": motionFields["exit"]!,
 ]
 
 func name(_ i: JSON) throws -> String { try Store.checkName(i["project"]?.string ?? "") }
@@ -180,6 +184,9 @@ private func applyFields(_ a: inout ReelAnimation, _ i: JSON) {
   if let v = i["to"] { a.to = v.double }
   if let v = i["prefix"] { a.prefix = v.string }
   if let v = i["suffix"] { a.suffix = v.string }
+  if let v = i["style"], case .object = v { var s = a.style ?? TextStyle(); try? s.apply(v); a.style = s == TextStyle() ? nil : s }
+  if let v = i["enter"]?.string { a.enter = v }
+  if let v = i["exit"]?.string { a.exit = v }
 }
 private func checkAnimation(_ a: ReelAnimation) throws {
   if !ANIMATION_KIND_IDS.contains(a.kind) { throw ToolError("invalid_animation", "kind has to be one of \(ANIMATION_KIND_IDS.joined(separator: ", "))") }
@@ -600,7 +607,7 @@ let coreTools: [ReelTool] = [
 
 // Every tool: the Mac app's own, the ones ported from the web editor (ToolsWeb.swift) and the web editor's names for the
 // Mac tools that do the same thing (list_reels, get_timeline, import_video).
-public let reelTools: [ReelTool] = { let base = coreTools + webTools + auditTools + focusTools; return base + webAliases(base) }()
+public let reelTools: [ReelTool] = { let base = coreTools + webTools + auditTools + focusTools + captionTools; return base + webAliases(base) }()
 
 public let toolByName: [String: ReelTool] = Dictionary(uniqueKeysWithValues: reelTools.map { ($0.name, $0) })
 

@@ -202,6 +202,9 @@ struct EditorView: View {
 // A divider that can be dragged: vertical between two columns, horizontal between two rows. An 8 point grip with a #eee
 // hairline down its middle that darkens under the pointer, the resize cursor over it, and a double click puts the size
 // back to the default. The sizes it sets are saved (EditorView's AppStorage), so the app opens as it was left.
+// A divider that drags. It takes only its 1 point line in the layout, so the lines meeting it run right up to it with no
+// white gap (Sankalp, 2 Nov 2026); the 8 point area that takes the pointer and the darker 2 point line shown on hover lie
+// over it without taking room.
 struct SplitHandle: View {
   enum Axis { case vertical, horizontal }
   let axis: Axis
@@ -214,24 +217,25 @@ struct SplitHandle: View {
   var body: some View {
     let vertical = axis == .vertical
     let on = hover || dragging
-    ZStack {
-      Rectangle().fill(on ? Ink.borderHover : Ink.hairline)
-        .frame(width: vertical ? (on ? 2 : 1) : nil, height: vertical ? nil : (on ? 2 : 1))
-    }
-    .frame(width: vertical ? 8 : nil, height: vertical ? nil : 8)
-    .frame(maxWidth: vertical ? nil : .infinity, maxHeight: vertical ? .infinity : nil)
-    .background(Ink.page)
-    .contentShape(Rectangle())
-    .zIndex(1)
-    .onHover { inside in
-      hover = inside
-      if inside { (vertical ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push() } else { NSCursor.pop() }
-    }
-    .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
-      .onChanged { g in dragging = true; onChange(vertical ? g.translation.width : g.translation.height) }
-      .onEnded { _ in dragging = false; onEnd() })
-    .onTapGesture(count: 2) { onReset() }
-    .help("Drag to resize, double click to reset")
+    Rectangle().fill(Ink.hairline)
+      .frame(width: vertical ? 1 : nil, height: vertical ? nil : 1)
+      .frame(maxWidth: vertical ? nil : .infinity, maxHeight: vertical ? .infinity : nil)
+      .overlay {
+        Rectangle().fill(on ? Ink.borderHover : Color.clear)
+          .frame(width: vertical ? 2 : nil, height: vertical ? nil : 2)
+          .frame(width: vertical ? 8 : nil, height: vertical ? nil : 8)
+          .contentShape(Rectangle())
+          .onHover { inside in
+            hover = inside
+            if inside { (vertical ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push() } else { NSCursor.pop() }
+          }
+          .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+            .onChanged { g in dragging = true; onChange(vertical ? g.translation.width : g.translation.height) }
+            .onEnded { _ in dragging = false; onEnd() })
+          .onTapGesture(count: 2) { onReset() }
+          .help("Drag to resize, double click to reset")
+      }
+      .zIndex(1)
   }
 }
 

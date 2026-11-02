@@ -148,23 +148,9 @@ public enum Overlay {
       root.addSublayer(t)
     }
 
+    // The captions in the project's caption style, outside its hidden stretches (Captions.swift).
     if flags.captions && drawCaptions {
-      let font = NSFont.systemFont(ofSize: (landscape ? 72 : 78) * u, weight: .heavy)
-      let maxW = landscape ? size.width * 0.62 : size.width * 0.8
-      let centre = captionCenter(l.project.edits, size: size)
-      for g in captionGroups(l, plan, speed: speed) where g.e > g.s {
-        let text = textLayer(g.text, font, .white, maxWidth: maxW, scale: contentsScale)
-        let box = CALayer()
-        let padX = 16 * u * 1.4, padY = 10 * u * 1.4
-        box.bounds = CGRect(x: 0, y: 0, width: text.bounds.width + padX * 2, height: text.bounds.height + padY * 2)
-        box.backgroundColor = CGColor(gray: 0, alpha: 0.82)
-        box.cornerRadius = 18 * u
-        box.position = centre
-        text.position = CGPoint(x: box.bounds.width / 2, y: box.bounds.height / 2)
-        box.addSublayer(text)
-        showBetween(box, g.s, g.e - g.s)
-        root.addSublayer(box)
-      }
+      for c in Captions.layers(l, plan, speed: speed, duration: rc.duration, frame: size, scale: contentsScale) { root.addSublayer(c) }
     }
     return root
   }

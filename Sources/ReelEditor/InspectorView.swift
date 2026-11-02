@@ -30,13 +30,13 @@ struct PanelHead: View {
     HStack(spacing: 12) {
       PanelLabel("Transcript", icon: "text-align-left").fixedSize()
       ViewThatFits(in: .horizontal) {
-        MetaLabel("\(model.plan.cuts.count) \(model.plan.cuts.count == 1 ? "cut" : "cuts"), \(Int(saved.rounded())) s saved", icon: "scissors").fixedSize()
+        MetaLabel("\(model.plan.cuts.count) \(model.plan.cuts.count == 1 ? "cut" : "cuts"), \(spoken(saved)) saved", icon: "scissors").fixedSize()
         Color.clear.frame(width: 0, height: 0)
       }
       Spacer(minLength: 8)
       if model.waitingCuts > 0 {
         Button { model.run("approve_cuts") } label: { IconLabel("Approve \(model.waitingCuts)", icon: "check", size: 12) }
-          .pill(.primary, .xs)
+          .pill(.primary, .xs).disabled(model.claudeEditing)
           .help("Cuts Claude made from the chat wait for your approval, drawn in amber. They already play as cuts.")
       }
       Button { model.toggle(.project) } label: { IconLabel("Project", icon: "sliders-horizontal", size: 14) }
@@ -224,11 +224,14 @@ struct AnimationEditor: View {
           }
         }
       }
-      Field("Side") {
-        SegmentTabs(items: [SegmentItem(value: "left", label: "Left"), SegmentItem(value: "center", label: "Center"), SegmentItem(value: "right", label: "Right")], selection: $a.side, fullWidth: true)
-      }
-      Field("Height") {
-        SegmentTabs(items: [SegmentItem(value: "top", label: "Top"), SegmentItem(value: "middle", label: "Middle"), SegmentItem(value: "bottom", label: "Bottom")], selection: $a.position, fullWidth: true)
+      // A text layer is placed by its own style (Place below), the other kinds by side and height.
+      if a.kind != "text" {
+        Field("Side") {
+          SegmentTabs(items: [SegmentItem(value: "left", label: "Left"), SegmentItem(value: "center", label: "Center"), SegmentItem(value: "right", label: "Right")], selection: $a.side, fullWidth: true)
+        }
+        Field("Height") {
+          SegmentTabs(items: [SegmentItem(value: "top", label: "Top"), SegmentItem(value: "middle", label: "Middle"), SegmentItem(value: "bottom", label: "Bottom")], selection: $a.position, fullWidth: true)
+        }
       }
       if fields.contains("text") {
         Field(a.kind == "checklist" ? "Items, one per line" : a.kind == "counter" ? "Label" : "Text") {
@@ -239,6 +242,7 @@ struct AnimationEditor: View {
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Ink.border, lineWidth: 1))
         }
       }
+      if a.kind == "text" { TextLayerControls(model: model, a: original) }
       if fields.contains("subtitle") { Field("Subtitle") { TextField("Subtitle", text: Binding(get: { a.subtitle ?? "" }, set: { a.subtitle = $0 })).textFieldStyle(.field) } }
       HStack(spacing: 12) {
         if fields.contains("from") { Field("From") { TextField("From", value: Binding(get: { a.from ?? 0 }, set: { a.from = $0 }), format: .number).textFieldStyle(.field) } }
@@ -343,4 +347,13 @@ struct ProjectPanel: View {
     editors = Editors.list(model.name)
     edited = Store.document(model.name).flatMap { (try? FileManager.default.attributesOfItem(atPath: $0.path)[.modificationDate]) as? Date }
   }
+}
+
+// A length in seconds as people say it (Sankalp, 2 Nov 2026): 45 s, 2 min 26 s, 1 h 4 min 9 s.
+func spoken(_ seconds: Double) -> String {
+  let t = Int(seconds.rounded())
+  let h = t / 3600, m = (t % 3600) / 60, s = t % 60
+  if h > 0 { return "\(h) h \(m) min \(s) s" }
+  if m > 0 { return s > 0 ? "\(m) min \(s) s" : "\(m) min" }
+  return "\(s) s"
 }

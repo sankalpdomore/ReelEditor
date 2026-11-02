@@ -9,6 +9,8 @@ enum AnimationLayers {
   struct Ctx { var a: ReelAnimation; var frame: CGSize; var start: Double; var length: Double; var u: CGFloat; var width: CGFloat; var scale: CGFloat }
 
   static func build(_ a: ReelAnimation, frame: CGSize, start: Double, length: Double, scale: CGFloat) -> CALayer? {
+    // A text layer is placed by its own style and moves by its own enter and exit (Captions.swift).
+    if a.kind == "text" { return Captions.textLayer(a, frame: frame, start: start, length: length, scale: scale) }
     let u = min(frame.width, frame.height) / 1080
     let landscape = frame.width > frame.height
     let width = a.side == "center" ? frame.width * (landscape ? 0.6 : 0.82) : frame.width * (landscape ? 0.34 : 0.8)

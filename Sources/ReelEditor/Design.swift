@@ -875,6 +875,7 @@ struct WidthShare: Layout {
 // now (Sankalp, 2 Nov 2026). Every shimmer runs on the same clock, so paragraphs shimmer together.
 struct Shimmer: ViewModifier {
   var active: Bool
+  var onGlyphs = true // false sweeps the whole shape, clipped to it, as on the timeline's band
   static let period = 1.6
 
   func body(content: Content) -> some View {
@@ -888,11 +889,29 @@ struct Shimmer: ViewModifier {
               .offset(x: -max(120, g.size.width * 0.4) + phase * (g.size.width + max(120, g.size.width * 0.4)))
           }
         }
-        .mask(content)
+        .mask { if onGlyphs { content } else { Rectangle() } }
         .allowsHitTesting(false)
       }
     } else { content }
   }
 }
 
-extension View { func shimmer(_ active: Bool) -> some View { modifier(Shimmer(active: active)) } }
+extension View { func shimmer(_ active: Bool, onGlyphs: Bool = true) -> some View { modifier(Shimmer(active: active, onGlyphs: onGlyphs)) } }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Capped height
+
+// Content as tall as it needs up to maxHeight, scrolling past it: how every card and panel keeps to 60% of the window's
+// height (Sankalp, 2 Nov 2026).
+struct CappedScroll<Content: View>: View {
+  let maxHeight: CGFloat
+  @ViewBuilder var content: Content
+  @State private var height: CGFloat = 120
+  var body: some View {
+    ScrollView { content.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height = $0 } }
+      .frame(height: max(80, min(height, maxHeight)))
+  }
+}
+
+// The share of the window's height a card, panel or modal may take.
+let CARD_SHARE: CGFloat = 0.6

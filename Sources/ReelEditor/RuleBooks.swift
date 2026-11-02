@@ -16,7 +16,7 @@ struct RuleBooksModal: View {
       ZStack {
         Color.black.opacity(0.24).onTapGesture { app.closeRules() }
         card
-          .frame(width: min(960, g.size.width - 64), height: min(720, g.size.height - 64))
+          .frame(width: min(960, g.size.width - 64), height: max(320, min(g.size.height * CARD_SHARE, g.size.height - 64)))
           .cardChrome()
           .transition(.card(from: .center))
       }

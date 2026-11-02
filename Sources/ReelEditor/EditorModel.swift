@@ -32,7 +32,10 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
   @Published private(set) var plan: Plan
   @Published private(set) var rc: ReelComposition?
   @Published private(set) var words: [WordView] = []
-  @Published private(set) var captionGroups: [Overlay.CaptionGroup] = []
+  // The caption lines in the project's caption style, and the style, for the preview to draw (Captions.swift).
+  @Published private(set) var captionLines: [Captions.Line] = []
+  @Published private(set) var captionStyle = Captions.builtIn(landscape: false)
+  var captionPictures: [String: (image: CGImage, size: CGSize)] = [:] // a line's pictures by line and spoken word, kept until the next change
   @Published private(set) var paragraphs: [Paragraph] = []
   @Published private(set) var extraWords: [ExtraEditWord] = [] // the words of the added clips and the voice overs, edit time
   @Published private(set) var overlayPeaks: [String: [Float]] = [:] // the waveform of each audio overlay file
@@ -86,9 +89,9 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
   @Published var focus = false // the Distraction free layout: only the video
   // The card floating over the editor: a layer's settings above the layer that was clicked on the timeline, or the
   // Project or Chat card under the transcript's head. floatingAt is the click, in the editor's coordinates.
-  enum Floating: Equatable { case animation(String), clip(String), overlay(String), project, chat }
+  enum Floating: Equatable { case animation(String), clip(String), overlay(String), project, chat, captions, voice }
   // REEL_EDITOR_FLOAT=project (or chat) opens that card at launch, for checking it in a snapshot.
-  @Published var floating: Floating? = ["project": Floating.project, "chat": .chat][ProcessInfo.processInfo.environment["REEL_EDITOR_FLOAT"] ?? ""]
+  @Published var floating: Floating? = ["project": Floating.project, "chat": .chat, "captions": .captions, "voice": .voice][ProcessInfo.processInfo.environment["REEL_EDITOR_FLOAT"] ?? ""]
   @Published var floatingAt: CGPoint = .zero
   func show(_ f: Floating, at p: CGPoint) {
     if floating != nil && floating != f { floating = nil } // a different layer: the old card goes at once, the new one springs in
@@ -136,6 +139,10 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
       floatingAt = CGPoint(x: 640, y: 640)
       floating = f.hasPrefix("animation") ? .animation(id) : f.hasPrefix("clip") ? .clip(id) : .overlay(id)
     }
+    // REEL_EDITOR_FLOAT=captions opens the Captions card from the Captions layer's name, as a click there does.
+    if floating == .captions || floating == .voice { floatingAt = CGPoint(x: 120, y: 860) }
+    // REEL_EDITOR_SEEK=2.5 opens with the playhead there, for checking the preview at a moment in a snapshot.
+    if let t = ProcessInfo.processInfo.environment["REEL_EDITOR_SEEK"].flatMap(Double.init) { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.seek(t) } }
     // REEL_EDITOR_SELECT=words:5-9 or range:1.5-3 opens with that selection, for checking the selection menus in a snapshot.
     if let sel = ProcessInfo.processInfo.environment["REEL_EDITOR_SELECT"], let colon = sel.firstIndex(of: ":") {
       let nums = sel[sel.index(after: colon)...].split(separator: "-").compactMap { Double($0) }
@@ -180,7 +187,10 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
       if !ids.isEmpty || p.words.isEmpty { paras.append(Paragraph(id: paras.count, title: p.title, words: ids, clip: p.clip, source: p.source, label: p.label, clipStart: p.clipStart)) }
     }
     words = all
-    captionGroups = flags.captions ? Overlay.captionGroups(loaded, plan, speed: speed) : []
+    let frame = exportSize
+    captionStyle = Captions.style(edl, landscape: frame.width > frame.height)
+    captionLines = flags.captions ? Captions.lines(loaded, plan, speed: speed, style: captionStyle, frame: frame) : []
+    captionPictures = [:]
     extraWords = extraEditWords(plan, edl, loaded.extra)
     paragraphs = paras
   }
@@ -218,7 +228,12 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
     let was = status["state"]?.string
     status = Store.status(name)
     let locked = editingNow
-    if locked != claudeEditing { claudeEditing = locked; if !locked && error == Self.lockedNote { error = nil } }
+    if locked != claudeEditing {
+      claudeEditing = locked
+      if !locked && error == Self.lockedNote { error = nil }
+      // A selection made before Claude started is let go, so no Cut or Comment menu stays up while it edits.
+      if locked { selectedWords = nil; selection = nil; selectedAnimation = nil; if case .animation = floating { floating = nil }; if case .clip = floating { floating = nil }; if case .overlay = floating { floating = nil } }
+    }
     // A transcription or an export that has just ended, from this app or an agent: a notification (Sankalp, 2 Nov 2026).
     if let was, was == "transcribing" || was == "exporting", let now = status["state"]?.string, now == "ready" || now == "error" {
       let export = status["kind"]?.string == "export"
@@ -378,6 +393,7 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
     case "progress-bar": args["text"] = "Progress"; args["to"] = 80
     case "callout": args["text"] = "Look at this"
     case "checklist": args["text"] = "First point\nSecond point\nThird point"
+    case "text": args["text"] = "Your text"; args["side"] = "center"
     default: break
     }
     run("add_animation", args) { [weak self] r in self?.selectedAnimation = r["created"]?.string }

@@ -76,38 +76,49 @@ struct PlayerLayerView: NSViewRepresentable {
   }
 }
 
-// The caption on screen at the playhead, styled like the export's.
+// The caption on screen at the playhead: the same picture the export shows then (Captions.lineImage), the line with the
+// word being spoken in its box or highlight, coming in as the export's does (Sankalp, 2 Nov 2026).
 struct CaptionOverlay: View {
   @ObservedObject var model: EditorModel
   @ObservedObject var clock: Clock
+  @State private var hover = false
 
   var body: some View {
     GeometryReader { geo in
       let size = model.exportSize
       let fit = AVMakeRect(aspectRatio: size, insideRect: CGRect(origin: .zero, size: geo.size))
       let k = fit.width / max(1, size.width)
-      let u = min(size.width, size.height) / 1080 * k
-      let landscape = size.width > size.height
       let out = outputOf(model.plan, clock.time) / model.speed
-      if let g = model.captionGroups.first(where: { out >= $0.s && out < $0.e }) {
-        Text(g.text)
-          .font(.system(size: (landscape ? 72 : 78) * u, weight: .heavy))
-          .foregroundStyle(.white)
-          .multilineTextAlignment(.center)
-          .padding(.horizontal, 22 * u).padding(.vertical, 14 * u)
-          .background(RoundedRectangle(cornerRadius: 18 * u).fill(.black.opacity(0.82)))
-          .frame(maxWidth: (landscape ? 0.62 : 0.8) * fit.width)
-          .position(captionPoint(fit: fit, k: k))
+      if let n = model.captionLines.firstIndex(where: { out >= $0.s && out < $0.e }) {
+        let line = model.captionLines[n], s = model.captionStyle
+        let active = Captions.perWord(s) ? Captions.activeWord(line, at: out) : nil
+        if let pic = picture(n, line, active) {
+          let c = Captions.center(s, frame: size)
+          let look = Captions.entrance(s.animation, t: out - line.s, unit: Captions.unit(size))
+          Image(decorative: pic.image, scale: 1)
+            .resizable()
+            .frame(width: pic.size.width * k, height: pic.size.height * k)
+            .scaleEffect(look.scale)
+            .opacity(look.opacity)
+            // A layer on the video: outlined on hover, and a click opens the Captions card (Sankalp, 2 Nov 2026).
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Ink.focus, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3])).opacity(hover || model.floating == .captions ? 1 : 0).padding(-4))
+            .contentShape(Rectangle())
+            .onHover { hover = $0 }
+            .onTapGesture(coordinateSpace: .named("editor")) { at in model.show(.captions, at: at) }
+            .help("Captions: click to change their look, place and where they are hidden")
+            .position(x: fit.minX + c.x * k, y: fit.minY + (size.height - c.y + look.rise) * k)
+        }
       }
     }
-    .allowsHitTesting(false)
   }
 
-  // Where the export puts the captions (Overlay.captionCenter, set_caption_position), in the preview's points.
-  func captionPoint(fit: CGRect, k: Double) -> CGPoint {
-    let size = model.exportSize
-    let c = Overlay.captionCenter(model.loaded.project.edits, size: size)
-    return CGPoint(x: fit.minX + c.x * k, y: fit.minY + (size.height - c.y) * k)
+  // A line's picture for its spoken word, drawn once at the frame's own size and kept until the project changes.
+  func picture(_ n: Int, _ line: Captions.Line, _ active: Int?) -> (image: CGImage, size: CGSize)? {
+    let key = "\(n)-\(active ?? -1)"
+    if let p = model.captionPictures[key] { return p }
+    guard let p = Captions.lineImage(line, active: active, style: model.captionStyle, frame: model.exportSize, scale: 1) else { return nil }
+    model.captionPictures[key] = p
+    return p
   }
 }
 
