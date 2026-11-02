@@ -42,10 +42,12 @@ public enum Rules {
 
   // Points a project's rule books at a folder (nil is the default _rules), and saves it as the last folder, which the
   // next new project starts with. Without a project only the last folder is saved. The other settings are kept.
-  public static func setDir(_ folder: URL?, project: String?) throws {
+  // remember false points the project at the folder without making it the one new projects start with.
+  public static func setDir(_ folder: URL?, project: String?, remember: Bool = true) throws {
     let target = folder ?? defaultDir
     if folder == nil { try? FileManager.default.createDirectory(at: defaultDir, withIntermediateDirectories: true) }
     if let project { _ = try Store.update(project) { p in p.rulesDir = target.path; return [:] } }
+    guard remember else { return }
     var s = settings()
     if let folder { s["rulesDir"] = folder.path } else { s["rulesDir"] = nil }
     try FileManager.default.createDirectory(at: Store.root, withIntermediateDirectories: true)
@@ -64,6 +66,76 @@ public enum Rules {
       out.append(Book(name: rel, file: u.path, text: text))
     }
     return out.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+  }
+
+  // ------------------------------------------------------------------------------------------------------------------
+  // Writing rule books (Sankalp, 2 Nov 2026): an agent can write a new rule book, change one, or give a project a rules
+  // folder of its own, so custom rules for one project never reach the others. Before a book is changed, its text is
+  // kept in the folder's hidden .previous folder (never read as a rule book), so nothing written by hand is lost.
+
+  // A project's own rules folder: <projects folder>/_rules-by-project/<name>.
+  public static func ownDir(for project: String) -> URL {
+    Store.root.appendingPathComponent("_rules-by-project", isDirectory: true).appendingPathComponent(project, isDirectory: true)
+  }
+
+  // The file of a rule book named by its path inside the folder, .md when it has no extension. The path stays inside the
+  // folder: no absolute path, no .., no hidden part.
+  public static func bookURL(_ dir: URL, _ raw: String) throws -> (url: URL, name: String) {
+    var name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    let parts = name.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+    guard !name.isEmpty, !name.hasPrefix("/"), !name.hasPrefix("~"), !parts.isEmpty,
+          !parts.contains(where: { $0 == ".." || $0 == "." || $0.hasPrefix(".") }) else {
+      throw ToolError("invalid_input", "Give the rule book's name inside the rules folder, like trims.md or voice/tone.md, with no .. or hidden parts")
+    }
+    name = parts.joined(separator: "/")
+    let ext = (name as NSString).pathExtension.lowercased()
+    if ext.isEmpty { name += ".md" }
+    else if !EXTENSIONS.contains(ext) { throw ToolError("invalid_input", "A rule book is a .md, .markdown or .txt file, not .\(ext)") }
+    return (dir.appendingPathComponent(name), name)
+  }
+
+  // Keeps a book's text as it is now in <folder>/.previous/<name> <time>.<ext>, before it is changed.
+  @discardableResult
+  public static func keepPrevious(_ dir: URL, _ url: URL, _ name: String) -> String? {
+    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH.mm.ss"; f.locale = Locale(identifier: "en_US_POSIX")
+    let base = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
+    let keep = dir.appendingPathComponent(".previous").appendingPathComponent("\(base) \(f.string(from: Date())).\(ext)")
+    try? FileManager.default.createDirectory(at: keep.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try? FileManager.default.removeItem(at: keep)
+    return (try? FileManager.default.copyItem(at: url, to: keep)) != nil ? keep.path : nil
+  }
+
+  // Writes a rule book whole, making its folder when needed.
+  public static func write(_ dir: URL, _ raw: String, _ text: String) throws -> (url: URL, name: String, created: Bool, previous: String?) {
+    let (url, name) = try bookURL(dir, raw)
+    let existed = FileManager.default.fileExists(atPath: url.path)
+    let kept = existed ? keepPrevious(dir, url, name) : nil
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try (text.hasSuffix("\n") ? text : text + "\n").write(to: url, atomically: true, encoding: .utf8)
+    return (url, name, !existed, kept)
+  }
+
+  // Gives a project a rules folder of its own, holding copies of the rule books it reads now when copy is true, and
+  // points the project at it. The folder new projects start with stays as it is. A project that already has its own
+  // folder keeps it as it is.
+  public static func makeOwn(_ project: String, copy: Bool) throws -> (dir: URL, copied: [String], already: Bool) {
+    let own = ownDir(for: project), now = dir(for: project)
+    if now.standardizedFileURL.path == own.standardizedFileURL.path { return (own, [], true) }
+    let fm = FileManager.default
+    try fm.createDirectory(at: own, withIntermediateDirectories: true)
+    var copied: [String] = []
+    if copy {
+      for b in books(in: now) {
+        let to = own.appendingPathComponent(b.name)
+        if fm.fileExists(atPath: to.path) { continue }
+        try fm.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.copyItem(at: URL(fileURLWithPath: b.file), to: to)
+        copied.append(b.name)
+      }
+    }
+    try setDir(own, project: project, remember: false)
+    return (own, copied, false)
   }
 
   // The rule books as a part of a system prompt, and whether some were left out for length.

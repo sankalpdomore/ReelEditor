@@ -19,9 +19,12 @@ enum NamePrompt: Identifiable, Equatable {
   var id: String { switch self { case .renameClip(let c, _): return "clip-\(c)"; case .renameOverlay(let o, _): return "overlay-\(o)" } }
 }
 
-struct WordView: Identifiable { let id: Int; let text: String; let s: Double?; let e: Double?; let cut: Bool; var pending = false } // pending: cut from the chat, waiting for approval
-// A paragraph of the transcript: a section heading when one starts there, and a run of word indexes.
-struct Paragraph: Identifiable { let id: Int; let title: String?; let words: Swift.Range<Int> }
+// A word of the transcript. Words of the project's own video keep their index as id; words of the other videos come after
+// them (extra), cut and restored by their times. pending: cut from the chat, waiting for approval.
+struct WordView: Identifiable { let id: Int; let text: String; let s: Double?; let e: Double?; let cut: Bool; var pending = false; var extra = false }
+// A paragraph of the transcript, in the order the reel plays: a section heading when one starts there, its words, and the
+// clip and video it belongs to; clipStart marks the first paragraph of a clip, where its header goes.
+struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [Int]; var clip = ""; var source = MAIN; var label = ""; var clipStart = false }
 
 @MainActor final class EditorModel: ObservableObject {
   let name: String
@@ -39,6 +42,25 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: Swi
   @Published var selectedWords: ClosedRange<Int>? = nil
   @Published var selectedAnimation: String? = nil
   @Published private(set) var status: JSON = [:]
+  @Published private(set) var agentFocus: AgentFocus? = nil // what Claude is working on, lit up in the transcript
+  // The paragraphs Claude has gone through since it started reading this reel (Sankalp, 2 Nov 2026): while it works, the
+  // ones it has not reached yet wait in yellow and the ones it has been through go back to plain. Kept across its turns,
+  // so "continue" picks up where it was; Clear in the chat starts over.
+  @Published private(set) var reviewed: Set<Int> = []
+  @Published private(set) var reviewStarted = false
+  func resetReview() { reviewed = []; reviewStarted = false }
+
+  // The paragraphs with a word inside a focus's span.
+  func paragraphIds(_ f: AgentFocus) -> [Int] {
+    paragraphs.filter { p in wordsOf(p).contains { w in guard let s = w.s else { return false }; return s < f.end && (w.e ?? s) > f.start } }.map(\.id)
+  }
+  func wordsOf(_ p: Paragraph) -> [WordView] { p.words.map { words[$0] } }
+  var mainWordCount: Int { loaded.words.count }
+
+  // Work over nearly the whole reel at once, such as the audit of all of it.
+  func isWide(_ ids: [Int]) -> Bool { ids.count > 3 && Double(ids.count) >= Double(paragraphs.count) * 0.8 }
+  // Waiting for Claude: it is working, has started reading the reel, and has not reached this paragraph yet.
+  func awaitsClaude(_ id: Int) -> Bool { agentFocus != nil && reviewStarted && !reviewed.contains(id) }
   @Published var error: String? = nil { didSet { if let error, error != oldValue { Log.error("editor", error, args: ["project": .string(name)]) } } }
   @Published private(set) var thumbs: [String: (step: Double, images: [CGImage])] = [:]
   @Published private(set) var peaks: [String: [Float]] = [:]
@@ -51,6 +73,16 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: Swi
   }
   @Published private(set) var overlayVersion = 0
   @Published private(set) var busy = false
+  // Claude is editing this reel (Sankalp, 2 Nov 2026): the chat's Claude is working on it, or an agent's tool calls
+  // show what it works on. Sankalp's own edits wait until it is done, so the two never undo each other's work; playing,
+  // reading, selecting, comments and exports still work. Kept from the live state by poll for the views.
+  @Published private(set) var claudeEditing = false
+  var editingNow: Bool { DirectChat.shared.isWorking(name) || agentFocus != nil }
+  // What still runs while Claude edits: what only reads, the comments (they go to Claude) and an export.
+  static func keepsReel(_ tool: String) -> Bool {
+    tool.hasPrefix("get_") || tool.hasPrefix("list_") || ["add_comment", "edit_comment", "resolve_comment", "reopen_comment", "export", "reveal_in_finder", "open_project_folder"].contains(tool)
+  }
+  static let lockedNote = "Claude is editing this reel. Your edits wait until it is done, or press Stop in the chat"
   @Published var focus = false // the Distraction free layout: only the video
   // The card floating over the editor: a layer's settings above the layer that was clicked on the timeline, or the
   // Project or Chat card under the transcript's head. floatingAt is the click, in the editor's coordinates.
@@ -127,20 +159,29 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: Swi
     let edl = loaded.project.edits
     let mapped = mapWords(plan, loaded.words), cut = wordsCut(plan, edl, loaded.words)
     let waiting = Set(edl.pendingWords ?? [])
-    words = loaded.words.enumerated().map { i, w in WordView(id: i, text: edl.corrections[String(i)] ?? w.w, s: mapped[i]?.s, e: mapped[i]?.e, cut: cut[i], pending: waiting.contains(i)) }
+    // A word inside a range cut that waits for approval waits too, so it shows in amber like a word cut from the chat.
+    let waitingRanges = plan.rangeCuts.filter { $0.pending == true }
+    var all = loaded.words.enumerated().map { i, w in
+      let mid = mapped[i].map { ($0.s + $0.e) / 2 }
+      let inWaitingRange = mid.map { m in waitingRanges.contains { m >= $0.s && m < $0.e } } ?? false
+      return WordView(id: i, text: edl.corrections[String(i)] ?? w.w, s: mapped[i]?.s, e: mapped[i]?.e, cut: cut[i], pending: waiting.contains(i) || (cut[i] && inWaitingRange))
+    }
+    // The transcript as the reel plays, clip by clip, every video's words (Sankalp, 2 Nov 2026), the same paragraphs
+    // get_paragraphs gives an agent. A word of the project's own video played again in a later clip is shown there too.
+    var shown = Set<Int>()
+    var paras: [Paragraph] = []
+    for p in transcriptLayout(loaded) {
+      var ids: [Int] = []
+      for w in p.words {
+        if let i = w.index, shown.insert(i).inserted { ids.append(i) }
+        // Another video's word, or a word of the project's own video played a second time: cut by its times.
+        else { ids.append(all.count); all.append(WordView(id: all.count, text: w.w, s: w.s, e: w.e, cut: w.cut, pending: w.pending, extra: true)) }
+      }
+      if !ids.isEmpty || p.words.isEmpty { paras.append(Paragraph(id: paras.count, title: p.title, words: ids, clip: p.clip, source: p.source, label: p.label, clipStart: p.clipStart)) }
+    }
+    words = all
     captionGroups = flags.captions ? Overlay.captionGroups(loaded, plan, speed: speed) : []
     extraWords = extraEditWords(plan, edl, loaded.extra)
-    // A new paragraph at every section, and after a sentence once a paragraph has 40 words (or at 90 words regardless).
-    let starts = Dictionary((edl.sections ?? []).map { ($0.from, $0.title) }, uniquingKeysWith: { a, _ in a })
-    var paras: [Paragraph] = []
-    var from = 0
-    for i in words.indices {
-      let n = i - from
-      if i > from && (starts[i] != nil || (n >= 40 && words[i - 1].text.last.map { ".?!".contains($0) } == true) || n >= 90) {
-        paras.append(Paragraph(id: paras.count, title: starts[from], words: from..<i)); from = i
-      }
-    }
-    if from < words.count { paras.append(Paragraph(id: paras.count, title: starts[from], words: from..<words.count)) }
     paragraphs = paras
   }
 
@@ -174,7 +215,29 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: Swi
   }
 
   private func poll() {
+    let was = status["state"]?.string
     status = Store.status(name)
+    let locked = editingNow
+    if locked != claudeEditing { claudeEditing = locked; if !locked && error == Self.lockedNote { error = nil } }
+    // A transcription or an export that has just ended, from this app or an agent: a notification (Sankalp, 2 Nov 2026).
+    if let was, was == "transcribing" || was == "exporting", let now = status["state"]?.string, now == "ready" || now == "error" {
+      let export = status["kind"]?.string == "export"
+      let what = export ? (now == "ready" ? "Export done" : "Export stopped") : (now == "ready" ? "Transcription done" : "Transcription stopped")
+      Notify.send("\(what): \(title)", status["message"]?.string ?? "", project: name)
+    }
+    let f = Focus.read(name)
+    if f != agentFocus {
+      withAnimation(.easeOut(duration: 0.25)) {
+        agentFocus = f
+        if let f {
+          let ids = paragraphIds(f)
+          if !isWide(ids) {
+            if f.action.hasPrefix("Reading") || f.action == "Applying trims" { reviewStarted = true }
+            if reviewStarted { reviewed.formUnion(ids) }
+          }
+        }
+      }
+    }
     let now = Store.revs(name)
     if now.0 != revs.0 || now.1 != revs.1 || now.2 != revs.2 { revs = now; Task { await reloadFromDisk() } }
   }
@@ -234,7 +297,7 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: Swi
     let t = editOf(plan, out * speed)
     clock.time = t
     clock.playing = player.rate != 0
-    let w = words.last { !$0.cut && ($0.s ?? .infinity) <= t + 0.01 }
+    let w = words.filter { !$0.cut && ($0.s ?? .infinity) <= t + 0.01 }.max { ($0.s ?? 0) < ($1.s ?? 0) }
     let cw = w.flatMap { ($0.e ?? 0) + 0.6 >= t ? $0.id : nil }
     if cw != currentWord { currentWord = cw }
   }
@@ -261,6 +324,7 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: Swi
   // Editing, through the same tools an agent calls
 
   func run(_ tool: String, _ args: [String: JSON] = [:], then: ((JSON) -> Void)? = nil) {
+    if editingNow && !Self.keepsReel(tool) { error = Self.lockedNote; return }
     var a = args
     a["project"] = .string(name)
     busy = true
@@ -281,14 +345,17 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: Swi
     return (a, b)
   }
 
+  // Words of the other videos have no index for delete_words, so a selection with any of them is cut by its times.
+  var selectionHasExtra: Bool { selectedWords.map { $0.upperBound >= mainWordCount } ?? false }
   func cutSelection() {
-    if let r = selectedWords { run("delete_words", ["indexes": .array(r.map { .number(Double($0)) })]); selectedWords = nil }
+    if let r = selectedWords, selectionHasExtra { if let (a, b) = selectedWordRange { run("cut_range", ["start": .number(a), "end": .number(b)]) }; selectedWords = nil }
+    else if let r = selectedWords { run("delete_words", ["indexes": .array(r.map { .number(Double($0)) })]); selectedWords = nil }
     else if let s = selection { run("cut_range", ["start": .number(s.s), "end": .number(s.e)]); selection = nil }
   }
 
   func restoreSelection() {
     if let r = selectedWords {
-      run("restore_words", ["indexes": .array(r.map { .number(Double($0)) })])
+      if !selectionHasExtra { run("restore_words", ["indexes": .array(r.map { .number(Double($0)) })]) }
       if let (a, b) = selectedWordRange { run("restore_range", ["start": .number(a), "end": .number(b)]) }
       selectedWords = nil
     } else if let s = selection { run("restore_range", ["start": .number(s.s), "end": .number(s.e)]); selection = nil }
@@ -338,12 +405,13 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: Swi
   // ------------------------------------------------------------------------------------------------------------------
   // Long jobs
 
+  // Transcribes every video of the reel that has no words yet, one after another (Sankalp, 2 Nov 2026).
   func transcribe() {
     let n = name
     Log.write("app", "transcribe", args: ["project": .string(n)])
-    Store.setStatus(n, ["state": "transcribing", "kind": "transcribe", "message": "Starting"])
+    Store.setStatus(n, ["state": "transcribing", "kind": "transcribe", "message": "Starting", "pid": .number(Double(getpid()))])
     status = Store.status(n)
-    Task.detached { do { _ = try await Jobs.transcribe(n) } catch { await MainActor.run { self.error = String(describing: error) } } }
+    Task.detached { do { try await Jobs.transcribeAll(n) } catch { await MainActor.run { self.error = String(describing: error) } } }
   }
 
   // Export from the top bar's button or Cmd E: asks where to save the MP4, the project's exports folder by default.

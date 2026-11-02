@@ -76,7 +76,7 @@ enum Ink {
   static let hover = tone(0xf5f5f5, 0x2a2a2a) // a ghost or outline button under the pointer
   static let border = tone(0xdddddd, 0x333333) // every resting border
   static let borderHover = tone(0xcccccc, 0x444444)
-  static let hairline = tone(0xeeeeee, 0x222222) // the lines between the window's zones
+  static let hairline = tone(0xdddddd, 0x333333) // the lines between the window's zones, #ddd like every border (Sankalp, 2 Nov 2026)
   static let strong = tone(0x111111, 0xeeeeee) // titles
   static let text = tone(0x333333, 0xdddddd) // body text
   static let secondary = tone(0x666666, 0xaaaaaa)
@@ -93,6 +93,7 @@ enum Ink {
   static let red = Color(nsColor: NSColor(hex: 0xef4444))
   static let green = Color(nsColor: NSColor(hex: 0x2f7d3b))
   static let amber = Color(nsColor: NSColor(hex: 0xb45309)) // a cut waiting for approval
+  static let yellow = Color(nsColor: NSColor(hex: 0xeab308)) // the wash on a paragraph whose cuts wait for review
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -216,6 +217,7 @@ struct SegmentTabs<T: Hashable>: View {
   @Binding var selection: T
   var iconOnly = false
   var fullWidth = false
+  var height: Double = 40 // the whole bar; 32 sits level with a Dropdown beside it
   @Namespace private var ns
 
   var body: some View {
@@ -231,7 +233,7 @@ struct SegmentTabs<T: Hashable>: View {
           .foregroundStyle(on ? Ink.text : Ink.faint)
           .padding(.horizontal, iconOnly ? 8 : 12)
           .frame(maxWidth: fullWidth ? .infinity : nil)
-          .frame(height: 32)
+          .frame(height: height - 8)
           .background {
             if on {
               RoundedRectangle(cornerRadius: 8).fill(Ink.raised)
@@ -548,7 +550,7 @@ struct ValueSlider: View {
 
 // The menu that floats at a selection, the web reel-selection-menu: a white pill with a soft shadow holding Cut, Uncut,
 // Correct and Comment for Claude. Correct turns it into a field with the selected words to retype; Comment turns it into
-// a comment box whose text is left on the selection for Claude to pick up (add_comment).
+// a comment box whose text is left on the selection (add_comment) and sent to the chat's Claude at once.
 struct SelectionMenu: View {
   enum Mode { case buttons, correct, comment }
   var canCut = true
@@ -749,3 +751,148 @@ struct UsageMeterRow: View {
   }
   func legend(_ c: Color, _ t: String) -> some View { HStack(spacing: 4) { Circle().fill(c).frame(width: 6, height: 6); Text(t).monospacedDigit() } }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Markdown: a document's text laid out as the web app's prose, block by block. Headings, bullet and numbered lists
+// (nested by their indent), quotes, code blocks, rules and paragraphs; bold, italic, code and links inside a line.
+
+struct MarkdownBlocks: View {
+  let text: String
+
+  enum Block {
+    case heading(Int, String)
+    case item(Int, String, String) // depth, marker, text
+    case quote(String)
+    case code(String)
+    case rule
+    case para(String)
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      ForEach(Array(Self.blocks(text).enumerated()), id: \.offset) { i, b in view(b, first: i == 0) }
+    }
+  }
+
+  @ViewBuilder func view(_ b: Block, first: Bool) -> some View {
+    switch b {
+    case .heading(let level, let s):
+      Self.inline(s)
+        .font(.inter(level == 1 ? 20 : level == 2 ? 16 : 14, .semibold)).foregroundStyle(Ink.strong)
+        .padding(.top, first ? 0 : level <= 2 ? 16 : 8)
+    case .item(let depth, let marker, let s):
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Text(marker).font(.inter(14)).foregroundStyle(Ink.muted).frame(minWidth: 12, alignment: .trailing)
+        Self.inline(s).font(.inter(14)).foregroundStyle(Ink.text).lineSpacing(4)
+      }
+      .padding(.leading, Double(depth) * 20)
+    case .quote(let s):
+      Self.inline(s).font(.inter(14)).foregroundStyle(Ink.secondary).lineSpacing(4)
+        .padding(.leading, 12)
+        .overlay(alignment: .leading) { Rectangle().fill(Ink.border).frame(width: 2) }
+    case .code(let s):
+      Text(s).font(.system(size: 12, design: .monospaced)).foregroundStyle(Ink.text)
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Ink.sunken))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Ink.border, lineWidth: 1))
+    case .rule:
+      Hairline().padding(.vertical, 8)
+    case .para(let s):
+      Self.inline(s).font(.inter(14)).foregroundStyle(Ink.text).lineSpacing(4)
+    }
+  }
+
+  // Bold, italic, code and links inside a line, or the line as it is when it is not valid markdown.
+  static func inline(_ s: String) -> Text {
+    if let a = try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) { return Text(a) }
+    return Text(s)
+  }
+
+  // The groups of a whole line matched by a pattern, or nil.
+  static func match(_ pattern: String, _ s: String) -> [String]? {
+    guard let re = try? NSRegularExpression(pattern: pattern), let m = re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) else { return nil }
+    return (1..<m.numberOfRanges).map { i in Range(m.range(at: i), in: s).map { String(s[$0]) } ?? "" }
+  }
+
+  static func blocks(_ text: String) -> [Block] {
+    var out: [Block] = []
+    var para: [String] = []
+    var code: [String]? = nil
+    func flush() { if !para.isEmpty { out.append(.para(para.joined(separator: " "))); para = [] } }
+    for raw in text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n") {
+      let line = raw.trimmingCharacters(in: .whitespaces)
+      if line.hasPrefix("```") {
+        if let c = code { out.append(.code(c.joined(separator: "\n"))); code = nil } else { flush(); code = [] }
+        continue
+      }
+      if code != nil { code!.append(raw); continue }
+      if line.isEmpty { flush(); continue }
+      if let m = match(#"^(#{1,6})\s+(.*)$"#, line) { flush(); out.append(.heading(m[0].count, m[1])); continue }
+      if match(#"^([-*_])\s*(\1\s*){2,}$"#, line) != nil { flush(); out.append(.rule); continue }
+      if let m = match(#"^(\s*)([-*+]|\d+[.)])\s+(.*)$"#, raw) {
+        flush()
+        let indent = m[0].replacingOccurrences(of: "\t", with: "  ").count
+        let marker = "-*+".contains(m[1]) ? "•" : m[1]
+        out.append(.item(min(4, indent / 2), marker, m[2]))
+        continue
+      }
+      if line.hasPrefix(">") { flush(); out.append(.quote(String(line.dropFirst()).trimmingCharacters(in: .whitespaces))); continue }
+      para.append(line)
+    }
+    if let c = code { out.append(.code(c.joined(separator: "\n"))) }
+    flush()
+    return out
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// At most a share of the width
+
+// Gives its one view at most a share of the width offered, as narrow as the view wants inside that, placed at the
+// leading or trailing edge: a chat bubble up to 80% of the chat's width (Sankalp, 2 Nov 2026).
+struct WidthShare: Layout {
+  var share: Double = 0.8
+  var trailing = false
+
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    guard let v = subviews.first else { return .zero }
+    let s = v.sizeThatFits(ProposedViewSize(width: proposal.width.map { $0 * share }, height: nil))
+    return CGSize(width: proposal.width ?? s.width, height: s.height)
+  }
+
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    guard let v = subviews.first else { return }
+    let p = ProposedViewSize(width: bounds.width * share, height: nil)
+    let s = v.sizeThatFits(p)
+    v.place(at: CGPoint(x: trailing ? bounds.maxX - s.width : bounds.minX, y: bounds.minY), proposal: ProposedViewSize(width: s.width, height: s.height))
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Shimmer
+
+// A light band that sweeps across text again and again, on the glyphs only: the words Claude is reading or changing
+// now (Sankalp, 2 Nov 2026). Every shimmer runs on the same clock, so paragraphs shimmer together.
+struct Shimmer: ViewModifier {
+  var active: Bool
+  static let period = 1.6
+
+  func body(content: Content) -> some View {
+    if active {
+      content.overlay {
+        SwiftUI.TimelineView(.animation(minimumInterval: 1.0 / 30)) { t in
+          let phase = t.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: Self.period) / Self.period
+          GeometryReader { g in
+            LinearGradient(colors: [Ink.page.opacity(0), Ink.page.opacity(0.75), Ink.page.opacity(0)], startPoint: .leading, endPoint: .trailing)
+              .frame(width: max(120, g.size.width * 0.4))
+              .offset(x: -max(120, g.size.width * 0.4) + phase * (g.size.width + max(120, g.size.width * 0.4)))
+          }
+        }
+        .mask(content)
+        .allowsHitTesting(false)
+      }
+    } else { content }
+  }
+}
+
+extension View { func shimmer(_ active: Bool) -> some View { modifier(Shimmer(active: active)) } }

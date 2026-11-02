@@ -18,17 +18,20 @@ struct EditorView: View {
   @State private var monitor: Any?
   @AppStorage("layoutLandscape") private var layoutLandscape = EditorLayout.wide.rawValue
   @AppStorage("layoutPortrait") private var layoutPortrait = EditorLayout.tall.rawValue
-  @AppStorage("timelineHeight") private var timelineHeight = 0.0 // 0 is the default
   @AppStorage("playerWidthLandscape") private var playerWidthLandscape = 0.0
   @AppStorage("playerWidthPortrait") private var playerWidthPortrait = 0.0
   @State private var dragStart: Double? = nil
   @AppStorage("chatDock") private var dock = "floating"
   @AppStorage("chatSide") private var sideOpen = false
+  // The side chat's width, dragged on its divider and saved (Sankalp, 2 Nov 2026); a double click puts it back to 400.
+  @AppStorage("chatWidth") private var chatWidth = 400.0
+  @AppStorage("timelineHeight") private var timelineHeight = 0.0 // 0 fits the timeline to its layers
+  @State private var chatDragStart: Double? = nil
 
   var landscape: Bool { model.exportSize.width >= model.exportSize.height }
   var layout: EditorLayout { EditorLayout(rawValue: landscape ? layoutLandscape : layoutPortrait) ?? (landscape ? .wide : .tall) }
 
-  static let defaultTimeline = Lanes.minHeight + 14 + 20
+  static let defaultTimeline = Lanes.minHeight + 14 // every layer, and the scroll bar under them
   static let minSide: Double = 320 // the narrowest the transcript or the video column gets
 
   // The editor, with the chat docked as a column on its right when it is set to the side panel and open.
@@ -36,7 +39,14 @@ struct EditorView: View {
     HStack(spacing: 0) {
       editor
       if dock == "side" && sideOpen {
-        Hairline(vertical: true)
+        SplitHandle(axis: .vertical,
+          onChange: { dx in
+            let start = chatDragStart ?? chatWidth
+            chatDragStart = start
+            chatWidth = max(320, min(start - dx, 900))
+          },
+          onEnd: { chatDragStart = nil },
+          onReset: { chatWidth = 400 })
         VStack(spacing: 0) {
           HStack(spacing: 8) {
             Icon("chat-circle-text", size: 16).foregroundStyle(Ink.muted)
@@ -48,7 +58,7 @@ struct EditorView: View {
           Hairline()
           ChatPanel(app: AppModel.shared, model: model)
         }
-        .frame(width: 400)
+        .frame(width: max(320, min(chatWidth, 900)))
         .background(Ink.page)
         .transition(.move(edge: .trailing).combined(with: .opacity))
       }
@@ -108,9 +118,12 @@ struct EditorView: View {
   // ------------------------------------------------------------------------------------------------------------------
   // Sizes
 
+  // The timeline's height under its toolbar, dragged with its divider (Sankalp, 2 Nov 2026): its layers keep their own
+  // heights, room past them is left empty at the bottom, and a shorter timeline scrolls up and down to show them all.
+  static let minTimeline: Double = 96
   func clampTimeline(_ total: Double) -> Double {
     let h = timelineHeight > 0 ? timelineHeight : Self.defaultTimeline
-    return max(Self.defaultTimeline - 20, min(h, total - 260))
+    return max(Self.minTimeline, min(h, total - 260))
   }
 
   // The video column: what was dragged to, or by default about half the window for a landscape video and the width a
@@ -136,13 +149,13 @@ struct EditorView: View {
       onReset: { setPlayerWidth(0) })
   }
 
-  // The divider above the timeline. Dragging it up makes the timeline taller.
+  // The divider above the timeline. Dragging it up makes the timeline taller; a double click fits it to its layers.
   func heightHandle(_ size: CGSize) -> some View {
     SplitHandle(axis: .horizontal,
       onChange: { dy in
         let start = dragStart ?? clampTimeline(size.height)
         dragStart = start
-        timelineHeight = max(Self.defaultTimeline - 20, min(start - dy, size.height - 260))
+        timelineHeight = max(Self.minTimeline, min(start - dy, size.height - 260))
       },
       onEnd: { dragStart = nil },
       onReset: { timelineHeight = 0 })
@@ -150,6 +163,15 @@ struct EditorView: View {
 
   func installKeys() {
     monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak model] e in
+      // While the rule books are open, Escape closes them and the up and down arrows move between them.
+      if AppModel.shared.rulesOpen, e.modifierFlags.intersection([.command, .option, .control]).isEmpty {
+        switch e.keyCode {
+        case 53: AppModel.shared.closeRules(); return nil
+        case 126: AppModel.shared.stepRuleBook(-1); return nil
+        case 125: AppModel.shared.stepRuleBook(1); return nil
+        default: break
+        }
+      }
       guard let model, e.window?.firstResponder as? NSTextView == nil else { return e }
       let mods = e.modifierFlags.intersection([.command, .option, .control])
       if !mods.isEmpty { return e }
@@ -237,18 +259,34 @@ struct TimelineToolbar: View {
   var body: some View {
     HStack(spacing: 4) {
       let hasSelection = model.selection != nil || model.selectedWords != nil
+      let locked = model.claudeEditing // Claude is editing: the editing buttons wait (Sankalp, 2 Nov 2026)
       Button { model.cutSelection() } label: { Icon("scissors", size: 16) }.pill(.ghost, .icon)
-        .disabled(!hasSelection).help("Cut the selected range or words (Delete)")
+        .disabled(!hasSelection || locked).help("Cut the selected range or words (Delete)")
       Button { model.restoreSelection() } label: { Icon("arrow-u-up-left", size: 16) }.pill(.ghost, .icon)
-        .disabled(!hasSelection).help("Bring the selection back (Shift Delete)")
+        .disabled(!hasSelection || locked).help("Bring the selection back (Shift Delete)")
       Button { model.splitAtPlayhead() } label: { Icon("arrows-split", size: 16) }.pill(.ghost, .icon)
-        .help("Split the clip at the playhead (S)")
+        .disabled(locked).help("Split the clip at the playhead (S)")
       Button { model.deleteClipAtPlayhead() } label: { Icon("trash", size: 16) }.pill(.ghost, .icon)
-        .disabled(model.plan.clips.count < 2).help("Take out the clip under the playhead")
+        .disabled(model.plan.clips.count < 2 || locked).help("Take out the clip under the playhead")
       Button { model.togglePlay() } label: { Icon(clock.playing ? "pause" : "play", size: 16, fill: true) }.pill(.ghost, .icon)
         .help("Play or pause (Space)")
       if model.busy { Spinner(size: 14).padding(.leading, 8) }
-      if let e = model.error, model.rc != nil { // without a composition the error already fills the video pane
+      if locked {
+        HStack(spacing: 8) {
+          Icon("lock-simple", size: 12)
+          Text("Claude is editing, your edits wait").font(.inter(12)).lineLimit(1)
+          if DirectChat.shared.isWorking(model.name) {
+            Button("Stop") { DirectChat.shared.interrupt() }.buttonStyle(.plain).font(.inter(12, .semibold)).foregroundStyle(Ink.text)
+          }
+        }
+        .foregroundStyle(Ink.secondary)
+        .padding(.horizontal, 12).frame(height: 28)
+        .background(Capsule().fill(Ink.select))
+        .overlay(Capsule().strokeBorder(Ink.focus.opacity(0.4), lineWidth: 1))
+        .padding(.leading, 8)
+        .help("While Claude edits this reel your own edits are held, so neither undoes the other. Play, read, select and comment as you like.")
+      }
+      if let e = model.error, e != EditorModel.lockedNote, model.rc != nil { // without a composition the error already fills the video pane
         HStack(spacing: 8) {
           Icon("warning-circle", size: 14)
           Text(e).font(.inter(12)).lineLimit(1).truncationMode(.tail)
@@ -276,7 +314,7 @@ struct TimelineToolbar: View {
       }
       StepperPill(icon: "gauge", value: String(format: "%.1fx", model.speed), help: "Playback and export speed",
         minus: { setSpeed(model.speed - 0.1) }, plus: { setSpeed(model.speed + 0.1) })
-      StepperPill(icon: "magnifying-glass", value: "\(Int((model.zoom / 24 * 100).rounded()))%", help: "Zoom the timeline (pinch, or = and -)",
+      StepperPill(icon: "magnifying-glass", value: "\(Int((model.zoom / 24 * 100).rounded()))%", help: "Zoom the timeline (pinch, Cmd or Ctrl with the scroll wheel, or = and -)",
         minus: { model.zoom = max(1, model.zoom / 1.25) }, plus: { model.zoom = min(160, model.zoom * 1.25) })
       // Follow, its own setting in a pill of its own beside the zoom.
       PillBox {

@@ -181,7 +181,12 @@ public enum Store {
     let rel = p.dropFirst(base.count).split(separator: "/", maxSplits: 1).map(String.init)
     guard rel.count == 2 else { return nil }
     if let k = PARTS[rel[1]] { return (rel[0], k, nil) }
-    if rel[1].hasPrefix("media/words-") && rel[1].hasSuffix(".json") { return (rel[0], "words", String(rel[1].dropFirst(12).dropLast(5))) }
+    // Only the words of a video or overlay, named by the hash of its path (wordsFile): a working file of WhisperX in the
+    // same folder is a file of its own (Sankalp, 2 Nov 2026).
+    if rel[1].hasPrefix("media/words-") && rel[1].hasSuffix(".json") {
+      let key = String(rel[1].dropFirst(12).dropLast(5))
+      if !key.isEmpty, key.allSatisfy(\.isHexDigit) { return (rel[0], "words", key) }
+    }
     return nil
   }
 

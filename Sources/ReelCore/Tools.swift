@@ -196,13 +196,22 @@ let coreTools: [ReelTool] = [
   },
   ReelTool(name: "create_project", description: "Opens a video file as a new project. The video stays where it is and is only ever read (link false copies it beside the project file instead). The project is one JSON file, <name>.reel.json, holding everything: the edits, the animations, the transcript, the undo history, comments and the draft; it is saved in folder (an absolute path) or, by default, in the Reel Editor folder, and put on the list the app and list_projects read. Transcribes the speech with WhisperX unless transcribe is false", inputSchema: obj([
     "path": ["type": "string", "minLength": 1, "maxLength": 2048, "description": "Absolute path of a video (mp4, mov, m4v)."],
+    "videos": ["type": "array", "items": ["type": "string", "minLength": 1, "maxLength": 2048], "minItems": 1, "maxItems": 100, "description": "Several videos for one project, instead of path: laid out one after another in the order they were recorded (order given keeps this order), the first as the project's own video and each of the others as a clip, every one transcribed in turn."],
+    "order": ["type": "string", "enum": ["recorded", "given"], "default": "recorded", "description": "With videos: by when each was recorded, or as listed."],
     "name": ["type": "string", "pattern": "^[a-z0-9-]{1,120}$", "description": "Name for the project. Default today's date, the file name and -v1 (the next free version)."],
     "transcribe": ["type": "boolean", "default": true, "description": "Transcribe the speech for word timings."],
     "wait": ["type": "boolean", "default": false, "description": "Wait until the transcription is done instead of returning at once."],
     "link": ["type": "boolean", "default": true, "description": "Read the video where it is (true), or copy it beside the project file (false)."],
     "folder": ["type": "string", "minLength": 1, "maxLength": 2048, "description": "Absolute path of the folder to save the project file in. Default the Reel Editor folder."],
-  ], ["path"])) { i in
+  ], [])) { i in
     let folder = i["folder"]?.string.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) }
+    if let vs = i["videos"]?.array?.compactMap(\.string) {
+      let urls = try vs.map { try Store.videoURL($0) }
+      let ordered = i["order"]?.string == "given" ? urls : await Arrange.byRecording(urls)
+      let l = try await Arrange.createProject(videos: ordered, name: i["name"]?.string, folder: folder, link: i["link"]?.bool ?? true, transcribe: i["transcribe"]?.bool ?? true)
+      return ["project": .string(l.project.name), "videos": .array(ordered.map { .string($0.path) }), "transcribing": .bool((i["transcribe"]?.bool ?? true) && Jobs.whisperx() != nil), "state": ReelState.of(l, words: false)]
+    }
+    guard i["path"]?.string != nil else { throw ToolError("invalid_input", "Give path, or videos for a project of several videos") }
     let l = try await Store.create(video: try Store.videoURL(i["path"]!.string!), name: i["name"]?.string, link: i["link"]?.bool ?? true, folder: folder)
     let n = l.project.name
     let transcribe = (i["transcribe"]?.bool ?? true) && l.project.main.hasAudio
@@ -233,11 +242,20 @@ let coreTools: [ReelTool] = [
     let r = try Store.relocate(n, to: URL(fileURLWithPath: (i["folder"]!.string! as NSString).expandingTildeInPath, isDirectory: true))
     return ["project": .string(n), "file": .string(r.to.path), "previous": .string(r.from.path)]
   },
-  ReelTool(name: "get_project", description: "The whole state of a project: its clips (in and out in source seconds, editStart and editEnd in edit time), the cuts, the kept ranges, the length of the export (duration, after cuts and speed), the words with their indexes and edit times (empty without a transcript), the sections, the export options and the animation layer (each animation also has outStart and outEnd, its place in the export). Read this before editing and after, to check what an edit did.", inputSchema: obj(["project": projectArg, "words": ["type": "boolean", "default": true, "description": "Include the words. False for a shorter answer."]], ["project"])) { i in
-    ReelState.of(try Store.load(try name(i)), words: i["words"]?.bool ?? true)
+  ReelTool(name: "get_project", description: "The whole state of a project: its clips (in and out in source seconds, editStart and editEnd in edit time), the cuts, the kept ranges, the length of the export (duration, after cuts and speed), the words with their indexes and edit times (empty without a transcript), the sections, the export options and the animation layer (each animation also has outStart and outEnd, its place in the export). Read this before editing and after, to check what an edit did. A transcript of more than 1,500 words is left out unless words is true (wordsOmitted says how many); read it a page at a time with get_words.", inputSchema: obj(["project": projectArg, "words": ["type": "boolean", "description": "Include the words. Left out, they are included up to 1,500 words. False for a shorter answer."]], ["project"])) { i in
+    let l = try Store.load(try name(i))
+    let long = l.words.count > 1500
+    var state = ReelState.of(l, words: i["words"]?.bool ?? !long)
+    if long, i["words"] == nil, var o = state.object {
+      o["wordsOmitted"] = .number(Double(l.words.count)); o["extraWords"] = nil
+      o["readWordsWith"] = "get_words, a page at a time"
+      state = .object(o)
+    }
+    return state
   },
   ReelTool(name: "cut_range", description: "Cuts a range out: the picture and sound between start and end (edit time, seconds) are skipped by playback and left out of the export. Nothing is deleted; restore_range or undo brings it back. A range touching an earlier cut joins it. A cut made through MCP waits for Sankalp's approval (pending, see approve_cuts) unless approved is true; it plays and exports as a cut either way.", inputSchema: obj(["project": projectArg, "start": sec("Where the cut starts."), "end": sec("Where the cut ends."), "approved": ["type": "boolean", "description": "True only for a cut Sankalp made himself. Left out from an agent, the cut waits for his approval (approve_cuts)."]], ["project", "start", "end"])) { i in
     let pending = !(i["approved"]?.bool ?? !ToolContext.cutsWaitForApproval)
+    if let n = try? name(i) { Focus.set(n, "Applying trims", i["start"]!.double!, i["end"]!.double!) }
     return try edit(i, "cut_range") { e, _, m in let r = try cutRange(e, m, i["start"]!.double!, i["end"]!.double!, pending: pending); e = r.edl; return r.info }
   },
   ReelTool(name: "restore_range", description: "Brings back a range cut_range took out: cuts inside start to end are removed, a cut that crosses an end is shortened. Cut words come back with restore_words.", inputSchema: obj(["project": projectArg, "start": sec("Start of the range to bring back."), "end": sec("End of the range.")], ["project", "start", "end"])) { i in
@@ -246,6 +264,9 @@ let coreTools: [ReelTool] = [
   ReelTool(name: "delete_words", description: "Cuts words out of the video by index (get_project words). A run of cut words and the pause after it are skipped. Give indexes, or from and to for a run. Words cut through MCP wait for Sankalp's approval (pendingWords, see approve_cuts) unless approved is true.", inputSchema: obj(["project": projectArg, "indexes": wordsArg, "from": ["type": "integer", "minimum": 0], "to": ["type": "integer", "minimum": 0], "approved": ["type": "boolean", "description": "True only for words Sankalp cut himself."]], ["project"])) { i in
     let idx = try ints(i)
     let pending = !(i["approved"]?.bool ?? !ToolContext.cutsWaitForApproval)
+    if let n = try? name(i), let l = try? Store.load(n), let lo = idx.min(), let hi = idx.max(), hi < l.words.count, let r = span(l.plan, l.words, lo..<(hi + 1)) {
+      Focus.set(n, "Applying trims", r.s, r.e)
+    }
     return try edit(i, "delete_words") { e, _, m in e = try deleteWords(e, m, idx, pending: pending).edl; return [:] }
   },
   ReelTool(name: "restore_words", description: "Brings cut words back, by indexes or by from and to.", inputSchema: obj(["project": projectArg, "indexes": wordsArg, "from": ["type": "integer", "minimum": 0], "to": ["type": "integer", "minimum": 0]], ["project"])) { i in
@@ -410,13 +431,21 @@ let coreTools: [ReelTool] = [
       return ["animations": .number(Double(list.count))]
     }
   },
-  ReelTool(name: "transcribe", description: "Transcribes the project's speech with WhisperX for word timings, in the background (a minute or two). Poll get_status. Replaces the transcript; word cuts are word indexes, so cut words of an old transcript may no longer match.", inputSchema: obj(["project": projectArg, "wait": ["type": "boolean", "default": false]], ["project"])) { i in
+  ReelTool(name: "transcribe", description: "Transcribes the project's speech with WhisperX for word timings, in the background (a minute or two a video): the project's own video again, then every added video that has no words yet, one after another; one that fails or has no speech does not stop the rest. Poll get_status, which says how far it is. Replaces the project's own transcript; word cuts are word indexes, so cut words of an old transcript may no longer match. wait true answers when every video is done, with the words and the videos done and failed.", inputSchema: obj(["project": projectArg, "wait": ["type": "boolean", "default": false]], ["project"])) { i in
     let n = try name(i)
-    _ = try Store.load(n)
-    if i["wait"]?.bool == true { return ["project": .string(n), "words": .number(Double(try await Jobs.transcribe(n)))] }
-    Store.setStatus(n, ["state": "transcribing", "kind": "transcribe", "message": "Queued"])
-    Task.detached { _ = try? await Jobs.transcribe(n) }
-    return ["project": .string(n), "started": true]
+    let todo = try Jobs.pendingVideos(n, redoMain: true)
+    if todo.isEmpty {
+      if !(try Store.load(n)).project.main.hasAudio { throw ToolError("no_audio", "The video has no sound to transcribe, and every added video with sound already has its words") }
+      return ["project": .string(n), "started": false, "videos": .array([])]
+    }
+    if i["wait"]?.bool == true {
+      let r = try await Jobs.transcribeAll(n, redoMain: true)
+      return ["project": .string(n), "words": .number(Double(r.words)), "done": .array(r.done.map { .string($0) }),
+              "failed": .array(r.failed.map { ["video": .string($0.0), "error": .string($0.1)] })]
+    }
+    Store.setStatus(n, ["state": "transcribing", "kind": "transcribe", "message": "Queued", "pid": .number(Double(getpid()))])
+    Task.detached { _ = try? await Jobs.transcribeAll(n, redoMain: true) }
+    return ["project": .string(n), "started": true, "videos": .array(todo.map { .string($0.label) })]
   },
   ReelTool(name: "import_transcript", description: "Sets the project's words from a JSON file of [{w, s, e}] (word, start and end in source seconds of the project's own video), for example a transcript made elsewhere.", inputSchema: obj(["project": projectArg, "path": ["type": "string", "minLength": 1, "maxLength": 2048]], ["project", "path"])) { i in
     let n = try name(i)
@@ -497,6 +526,70 @@ let coreTools: [ReelTool] = [
     let dir = Rules.dir(for: p)
     return ["project": p.map { .string($0) } ?? .null, "folder": .string(dir.path), "last": .string(Rules.lastDir.path), "count": .number(Double(Rules.books(in: dir).count))]
   },
+  // Writing rule books (Sankalp, 2 Nov 2026), so an agent can write custom rules for a project when he asks.
+  ReelTool(name: "write_rule_book", description: "Writes a rule book, a new one or a whole new text for one, into a project's rules folder (without project, the folder new projects start with). name is its path inside the folder, like trims.md or voice/tone.md (.md when left out; .md, .markdown and .txt only). The text it had is kept in the folder's hidden .previous folder. The answer says which other projects read the same folder: rules meant only for this project go in a folder of its own, made with make_project_rules_folder first. To change a few lines, edit_rule_book.", inputSchema: obj([
+    "project": projectArg,
+    "name": ["type": "string", "minLength": 1, "maxLength": 200, "description": "The rule book's path inside the rules folder, for example trims.md."],
+    "text": ["type": "string", "minLength": 1, "maxLength": 200000, "description": "The whole text of the rule book, in markdown."],
+  ], ["name", "text"])) { i in
+    let p = i["project"]?.string != nil ? try name(i) : nil
+    if let p { _ = try Store.load(p) }
+    let dir = Rules.dir(for: p)
+    let r = try Rules.write(dir, i["name"]?.string ?? "", i["text"]?.string ?? "")
+    var o = rulesAnswer(p, dir)
+    o["name"] = .string(r.name); o["file"] = .string(r.url.path); o["created"] = .bool(r.created)
+    if let k = r.previous { o["previous"] = .string(k) }
+    return .object(o)
+  },
+  ReelTool(name: "edit_rule_book", description: "Changes part of a rule book in a project's rules folder (without project, the folder new projects start with): old is replaced by new, as exact text. old must be found once, or give all true to replace every one. The text it had is kept in the folder's hidden .previous folder. get_rules shows the books and their text.", inputSchema: obj([
+    "project": projectArg,
+    "name": ["type": "string", "minLength": 1, "maxLength": 200, "description": "The rule book's path inside the rules folder, as get_rules names it."],
+    "old": ["type": "string", "minLength": 1, "maxLength": 200000, "description": "The exact text to replace."],
+    "new": ["type": "string", "maxLength": 200000, "description": "The text to put in its place; empty removes it."],
+    "all": ["type": "boolean", "description": "True replaces every place old is found."],
+  ], ["name", "old", "new"])) { i in
+    let p = i["project"]?.string != nil ? try name(i) : nil
+    if let p { _ = try Store.load(p) }
+    let dir = Rules.dir(for: p)
+    let (url, book) = try Rules.bookURL(dir, i["name"]?.string ?? "")
+    guard let text = try? String(contentsOf: url, encoding: .utf8) else { throw ToolError("not_found", "No rule book \(book) in \(dir.path); write_rule_book makes a new one") }
+    let old = i["old"]?.string ?? "", new = i["new"]?.string ?? ""
+    let n = text.components(separatedBy: old).count - 1
+    if n == 0 { throw ToolError("not_found", "old is not in \(book); read it with get_rules and copy the text exactly") }
+    if n > 1 && i["all"]?.bool != true { throw ToolError("ambiguous", "old is in \(book) \(n) times; give more of the text around it, or all true") }
+    let kept = Rules.keepPrevious(dir, url, book)
+    try text.replacingOccurrences(of: old, with: new).write(to: url, atomically: true, encoding: .utf8)
+    var o = rulesAnswer(p, dir)
+    o["name"] = .string(book); o["file"] = .string(url.path); o["replaced"] = .number(Double(n))
+    if let kept { o["previous"] = .string(kept) }
+    return .object(o)
+  },
+  ReelTool(name: "delete_rule_book", description: "Takes a rule book out of a project's rules folder (without project, the folder new projects start with), so it is no longer read. Its text is kept in the folder's hidden .previous folder, from where it can be put back by hand. The answer names the other projects that read the same folder, which lose it too.", inputSchema: obj([
+    "project": projectArg,
+    "name": ["type": "string", "minLength": 1, "maxLength": 200, "description": "The rule book's path inside the rules folder, as get_rules names it."],
+  ], ["name"])) { i in
+    let p = i["project"]?.string != nil ? try name(i) : nil
+    if let p { _ = try Store.load(p) }
+    let dir = Rules.dir(for: p)
+    let (url, book) = try Rules.bookURL(dir, i["name"]?.string ?? "")
+    guard FileManager.default.fileExists(atPath: url.path) else { throw ToolError("not_found", "No rule book \(book) in \(dir.path); get_rules lists them") }
+    guard let kept = Rules.keepPrevious(dir, url, book) else { throw ToolError("write_failed", "Could not keep a copy of \(book), so it was left in place") }
+    try FileManager.default.removeItem(at: url)
+    var o = rulesAnswer(p, dir)
+    o["name"] = .string(book); o["deleted"] = true; o["previous"] = .string(kept)
+    return .object(o)
+  },
+  ReelTool(name: "make_project_rules_folder", description: "Gives a project a rules folder of its own, so rules written for it reach no other project: <projects folder>/_rules-by-project/<project>, with copies of the rule books it reads now unless copy is false, and the project pointed at it. The folder new projects start with is not changed. A project that already has its own folder keeps it. Then write_rule_book and edit_rule_book with this project change only its rules.", inputSchema: obj([
+    "project": projectArg,
+    "copy": ["type": "boolean", "description": "False starts the folder empty. True by default: copies of the rule books the project reads now."],
+  ], ["project"])) { i in
+    let p = try name(i)
+    _ = try Store.load(p)
+    let r = try Rules.makeOwn(p, copy: i["copy"]?.bool ?? true)
+    var o = rulesAnswer(p, r.dir)
+    o["copied"] = .array(r.copied.map { .string($0) }); o["already"] = .bool(r.already)
+    return .object(o)
+  },
   ReelTool(name: "get_app_state", description: "What the Reel Editor app shows right now: whether it is open, its tabs, the project in front and its file, the playhead (edit time) and whether it plays, the clip under the playhead, and what Sankalp has selected (a range, words with their text, an animation). Read it to talk about what he is looking at, for example \"cut this\" means the selection. running false means the app is not open; open_in_app starts it.", inputSchema: obj([:])) { _ in
     guard let s = AppState.read(), var o = s.object else { return ["running": false, "hint": "The Reel Editor app is not open. open_in_app opens a project in it."] }
     o["running"] = true
@@ -507,7 +600,7 @@ let coreTools: [ReelTool] = [
 
 // Every tool: the Mac app's own, the ones ported from the web editor (ToolsWeb.swift) and the web editor's names for the
 // Mac tools that do the same thing (list_reels, get_timeline, import_video).
-public let reelTools: [ReelTool] = { let base = coreTools + webTools; return base + webAliases(base) }()
+public let reelTools: [ReelTool] = { let base = coreTools + webTools + auditTools + focusTools; return base + webAliases(base) }()
 
 public let toolByName: [String: ReelTool] = Dictionary(uniqueKeysWithValues: reelTools.map { ($0.name, $0) })
 
@@ -541,4 +634,12 @@ public func callTool(_ name: String, _ input: JSON?) async -> ToolReply {
     Log.write("tool", name, args: args, ok: false, error: "\(code): \(message)", ms: ms, extra: ["by": .string(ToolContext.client)])
   }
   return reply
+}
+
+// What a rules tool answers with: the folder, its rule books, and the other projects that read the same folder.
+func rulesAnswer(_ project: String?, _ dir: URL) -> [String: JSON] {
+  let path = dir.standardizedFileURL.path
+  let others = Store.names().filter { $0 != project && Rules.dir(for: $0).standardizedFileURL.path == path }
+  return ["project": project.map { .string($0) } ?? .null, "folder": .string(dir.path), "books": .array(Rules.books(in: dir).map { .string($0.name) }),
+          "sharedWith": .array(others.map { .string($0) })]
 }

@@ -13,7 +13,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/ReelEditor" "$APP/Contents/MacOS/ReelEditor"
 cp "$BIN/reel-mcp" "$APP/Contents/MacOS/reel-mcp"
-cp Resources/transcribe_whisperx.py "$APP/Contents/Resources/"
+cp Resources/transcribe_whisperx.py Resources/audit_audio.py "$APP/Contents/Resources/"
 # The build stamp every log line in the _dump folder carries, so a QA pass knows which build wrote it.
 printf '{"built":"%s","git":"%s"}\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$(git rev-parse --short HEAD 2>/dev/null || echo none)" > "$APP/Contents/Resources/build.json"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"

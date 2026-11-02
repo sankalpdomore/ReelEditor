@@ -15,8 +15,10 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
 @MainActor final class AppModel: ObservableObject {
   static let shared = AppModel()
   @Published private(set) var projects: [String] = []
-  @Published var tabs: [EditorTab] = [] { didSet { UserDefaults.standard.set(tabs.compactMap(\.project), forKey: Self.tabsKey) } }
-  @Published var selected: UUID?
+  @Published var tabs: [EditorTab] = [] { didSet { UserDefaults.standard.set(tabs.compactMap(\.project), forKey: Self.tabsKey); Self.chatFollows() } }
+  @Published var selected: UUID? { didSet { Self.chatFollows() } }
+  // Each project shows its own chat: told once the change is made (also from init, so never synchronously).
+  static func chatFollows() { DispatchQueue.main.async { DirectChat.shared.frontChanged() } }
   @Published var error: String? { didSet { if let error { Log.error("app", error) } } }
   @Published var creating = false
   @Published private(set) var mcp: [MCPPresence] = [] // agents connected through reel-mcp right now
@@ -26,6 +28,20 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
   @Published var mcpOpen = ProcessInfo.processInfo.environment["REEL_EDITOR_MCP"] != nil
   // The App settings card under its button at the right of the top bar. REEL_EDITOR_APP_SETTINGS=1 opens it, for a snapshot.
   @Published var settingsOpen = ProcessInfo.processInfo.environment["REEL_EDITOR_APP_SETTINGS"] != nil
+  // The rule books modal, opened from the rule book count in the chat, and the book shown in it (nil is the first).
+  // REEL_EDITOR_RULES=1 opens it at launch, for a snapshot.
+  @Published var rulesOpen = ProcessInfo.processInfo.environment["REEL_EDITOR_RULES"] != nil
+  @Published var ruleBook: String? = nil
+  func openRules() { withAnimation(.cardOpen) { rulesOpen = true } }
+  func closeRules() { withAnimation(.cardClose) { rulesOpen = false } }
+  func pickRuleBook(_ name: String?) { ruleBook = name }
+  // Moves to the rule book before (-1) or after (1) the one shown, for the up and down arrows.
+  func stepRuleBook(_ by: Int) {
+    let names = DirectChat.shared.rules.map(\.name)
+    guard !names.isEmpty else { return }
+    let i = ruleBook.flatMap { names.firstIndex(of: $0) } ?? 0
+    ruleBook = names[max(0, min(names.count - 1, i + by))]
+  }
   // The sessions talking to this editor: the ones that have called one of its tools, latest first.
   // Ends one session's connection: its reel-mcp is asked to quit (SIGTERM), which removes its heartbeat, so the session
   // loses the editor's tools until it reconnects (/mcp in Claude Code). The Claude session itself keeps running.
@@ -108,6 +124,8 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
       let e = EditorModel(try Store.load(name)); e.start(); editors[name] = e
       Store.touch(name)
       Log.write("app", "open_project", args: ["project": .string(name), "file": .string(Store.document(name)?.path ?? "")])
+      // A transcription cut off when the app last quit picks up where it was: the videos that have their words keep them.
+      if Jobs.interrupted(name), Jobs.whisperx() != nil { Log.write("app", "transcribe_resumed", args: ["project": .string(name)]); e.transcribe() }
       return e
     }
     catch { self.error = String(describing: error); return nil }
@@ -124,7 +142,7 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
   func close(_ id: UUID) {
     guard let i = tabs.firstIndex(where: { $0.id == id }) else { return }
     Log.write("app", "close_tab", args: ["project": tabs[i].project.map { .string($0) } ?? .null])
-    if let n = tabs[i].project, !tabs.contains(where: { $0.id != id && $0.project == n }) { editors[n]?.stop(); editors[n] = nil }
+    if let n = tabs[i].project, !tabs.contains(where: { $0.id != id && $0.project == n }) { editors[n]?.stop(); editors[n] = nil; DirectChat.shared.closed(n) }
     tabs.remove(at: i)
     if tabs.isEmpty { tabs = [EditorTab(project: nil)] }
     if selected == id { selected = tabs[min(i, tabs.count - 1)].id }
@@ -173,6 +191,8 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
 
   // Renames from the title at the top of the transcript: the tab and the editor follow the project to its new name.
   func rename(_ name: String, to title: String) {
+    // Not while Claude edits it: the project's name is what its tool calls use.
+    if editors[name]?.editingNow == true { editors[name]?.error = EditorModel.lockedNote; return }
     do {
       let r = try Store.rename(name, title: title)
       Log.write("app", "rename_project", args: ["from": .string(name), "to": .string(r.name), "title": .string(title)])
@@ -184,6 +204,7 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
 
   private func follow(_ old: String, _ new: String) {
     known.insert(new)
+    DirectChat.shared.renamed(old, new)
     editors[old]?.stop()
     editors[old] = nil
   }
@@ -193,8 +214,9 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
   func chooseVideo() {
     let panel = NSOpenPanel()
     panel.allowedContentTypes = [.mpeg4Movie, .quickTimeMovie, UTType(filenameExtension: "m4v") ?? .movie]
-    panel.message = "Choose a video. It is only read, never changed."
-    if panel.runModal() == .OK, let url = panel.url { create(url) }
+    panel.message = "Choose one video, or several for one reel: they are laid out in the order they were recorded. They are only read, never changed."
+    panel.allowsMultipleSelection = true
+    if panel.runModal() == .OK, !panel.urls.isEmpty { create(panel.urls) }
   }
 
   @AppStorage("projectFolder") var projectFolder = ""
@@ -260,20 +282,20 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
     catch { self.error = String(describing: error) }
   }
 
-  func create(_ url: URL) {
-    guard let place = chooseWhere(for: url) else { return }
-    creating = true
-    let transcribe = transcribeNew
+  func create(_ url: URL) { create([url]) }
+
+  // A new project from one video or several (Sankalp, 2 Nov 2026): several are laid out one after another in the order
+  // they were recorded, the first as the project's own video, and every one is transcribed in turn.
+  func create(_ urls: [URL]) {
     Task {
+      let ordered = urls.count > 1 ? await Arrange.byRecording(urls) : urls
+      guard let first = ordered.first, let place = chooseWhere(for: first) else { return }
+      creating = true
       defer { creating = false }
       do {
-        let l = try await Store.create(video: try Store.videoURL(url.path), name: place.name, link: true, folder: place.folder)
+        let l = try await Arrange.createProject(videos: try ordered.map { try Store.videoURL($0.path) }, name: place.name, folder: place.folder, transcribe: transcribeNew)
         let n = l.project.name
-        Log.write("app", "create_project", args: ["project": .string(n), "video": .string(url.path)])
-        if transcribe && l.project.main.hasAudio {
-          Store.setStatus(n, ["state": "transcribing", "kind": "transcribe", "message": "Queued"])
-          Task.detached { _ = try? await Jobs.transcribe(n) }
-        }
+        Log.write("app", "create_project", args: ["project": .string(n), "videos": .array(ordered.map { .string($0.path) })])
         known.insert(n)
         projects = Store.names()
         open(n)
@@ -323,6 +345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
     Theme.apply(UserDefaults.standard.string(forKey: Theme.key) ?? Theme.light.rawValue)
+    Notify.setUp()
     // A snapshot run (below) stays in the background, so it never takes the keyboard from the app being typed in.
     if ProcessInfo.processInfo.environment["REEL_EDITOR_SNAPSHOT"] == nil { NSApp.activate(ignoringOtherApps: true) }
     // A click anywhere that is not a text field takes the keyboard back from a field (the chat's input, a name, a
@@ -403,7 +426,7 @@ struct EditorCommands: Commands {
 
   var body: some Commands {
     CommandGroup(replacing: .newItem) {
-      Button("New Project from Video…") { app.chooseVideo() }.keyboardShortcut("n")
+      Button("New Project from Videos…") { app.chooseVideo() }.keyboardShortcut("n")
       Button("Open Project…") { app.chooseProject() }.keyboardShortcut("o")
       Button("New Tab") { app.newTab() }.keyboardShortcut("t")
       Toggle("Transcribe New Videos", isOn: $app.transcribeNew)
@@ -523,6 +546,8 @@ struct MainView: View {
         }
       }
     }
+    // The rule books modal, over everything but the dropdown menus.
+    .overlay { if app.rulesOpen { RuleBooksModal(app: app) } }
   }
 }
 
@@ -796,6 +821,7 @@ struct LiveDot: View {
 struct AppSettingsPanel: View {
   @ObservedObject var app: AppModel
   @AppStorage(Theme.key) private var theme = Theme.light.rawValue
+  @AppStorage(Notify.key) private var notifications = true
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 8) {
@@ -806,6 +832,9 @@ struct AppSettingsPanel: View {
       }
       InsetCard(title: "Appearance", icon: "paint-brush") {
         SegmentTabs(items: Theme.allCases.map { SegmentItem(value: $0.rawValue, label: $0.title) }, selection: $theme, fullWidth: true)
+      }
+      InsetCard(title: "Notifications", icon: "bell") {
+        Toggle("When a transcription or an export ends, and when Claude finishes in the chat", isOn: $notifications).toggleStyle(.pillSwitch)
       }
       InsetCard(title: "Agents (MCP)", icon: "plugs-connected") {
         Note("Claude or any MCP client edits the same projects through the editor's tools, and this window follows along live. To add the tools to Claude Code:")
@@ -1057,7 +1086,13 @@ struct DropVideo: ViewModifier {
   func body(content: Content) -> some View {
     content
       .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
-        for p in providers { _ = p.loadObject(ofClass: URL.self) { url, _ in if let url { Task { @MainActor in app.create(url) } } } }
+        // Several videos dropped together make one project, in the order they were recorded.
+        let group = DispatchGroup(); var urls: [URL] = []; let lock = NSLock()
+        for p in providers {
+          group.enter()
+          _ = p.loadObject(ofClass: URL.self) { url, _ in if let url { lock.lock(); urls.append(url); lock.unlock() }; group.leave() }
+        }
+        group.notify(queue: .main) { if !urls.isEmpty { app.create(urls) } }
         return true
       }
       .overlay {
@@ -1104,7 +1139,7 @@ struct Welcome: View {
             HStack(spacing: 8) { Spinner(); Text("Reading the video").foregroundStyle(Ink.secondary) }.frame(height: 40)
           } else {
             HStack(spacing: 12) {
-              Button { app.chooseVideo() } label: { Text("Choose a video").font(.inter(16, .medium)) }.pill(.outline, .md)
+              Button { app.chooseVideo() } label: { Text("Choose videos").font(.inter(16, .medium)) }.pill(.outline, .md)
               Button { app.chooseProject() } label: { IconLabel("Open project", icon: "folder-open", size: 16).font(.inter(16, .medium)) }.pill(.outline, .md)
                 .help("Open a project file (.reel.json) saved anywhere (Cmd O)")
             }

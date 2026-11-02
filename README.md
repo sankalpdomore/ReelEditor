@@ -29,7 +29,7 @@ untouched. This is a separate port of it.
   folder for the project, `_cache/<name>/`. Exports go beside the project file, in `<name> exports/`. In the code each
   section is still named by its old file name: `Store.file(name, "project.json")` is a key whose reads and writes land
   in the `project` section (`Sources/ReelCore/Project.swift`).
-- **Opening and saving.** File > New Project from Video (Cmd N) asks for the video, then where to save the project file.
+- **Opening and saving.** File > New Project from Videos (Cmd N) asks for one video or several, then where to save the project file. Several videos, chosen together or dropped together, make one reel laid out in the order they were recorded (each video's own creation date, or its file's), the first as the project's own video and each of the others as a clip after it, and every one is transcribed in turn (Sankalp, 2 Nov 2026); `create_project` takes `videos` and `order` (recorded or given) for the same.
   File > Open Project (Cmd O) opens a `.reel.json` from anywhere and puts it on the list. The tabs open at launch are the
   ones left open last time, not every project. The Open a reel page lists the recent projects with their paths; right
   click one to show it in Finder, move it to another folder or take it off the list (the file stays). Hovering a card shows
@@ -64,7 +64,7 @@ untouched. This is a separate port of it.
 The app uses the main ContentApp web app's design language, not stock macOS (Sankalp, 31 Oct 2026), and is laid out
 like the web reel editor. `Sources/ReelEditor/Design.swift` ports it: Inter type and Phosphor Bold and Fill icons (both
 in `Resources/Fonts`, copied into the app by build.sh and registered at launch), the clean grey stops `#111` to `#eee`
-with `#ddd` borders, the web Button variants as fully round pills (the black gradient primary, the white outline, the
+with `#ddd` borders and separators (Sankalp, 2 Nov 2026), the web Button variants as fully round pills (the black gradient primary, the white outline, the
 ghost, the white to grey gradient of Open folder), the grey Tabs container with a white active tab, uppercase panel
 labels, the Draft and Live pills, the inset card (a grey shell with a white card inside, each level 4 points less
 rounded), fields, the switch, the slider and the spinner. Spacing is in multiples of 4. A view takes its look from
@@ -131,9 +131,9 @@ runs across the bottom: a toolbar (cut, restore, split, delete, play, the times,
 own), then the
 layers with their names in a column on the left (Add layer, Animation, Video, Audio, Voice and face, Captions). Cuts are
 red hatching. Right click a clip for its name, its sound, a voice over, the title over it, its own look and its
-placement; right click a voice or face overlay for its volume, name, words, split or sound effect flag. A trackpad pinch on
-the timeline zooms it around the fingers. The dividers between the transcript and the video and above the timeline drag,
-and a double click resets them; the column widths, the timeline's height, its zoom and Follow are saved, so the app
+placement; right click a voice or face overlay for its volume, name, words, split or sound effect flag. A click in the gap before time zero takes the playhead to the start, and in the gap after the end to the end, and the 0:00 label starts at the edge (Sankalp, 2 Nov 2026). A trackpad pinch on
+the timeline zooms it around the fingers, and so does Cmd or Ctrl with the scroll wheel, around the pointer. The dividers between the transcript and the video and above the timeline drag,
+and a double click resets them; the timeline's layers keep their own heights however tall it is dragged, the room past the last layer is left empty, and a timeline shorter than its layers scrolls up and down to show them all (Sankalp, 2 Nov 2026). The column widths, the timeline's height, its zoom and Follow are saved, so the app
 opens as it was left.
 
 Cmd plus and Cmd minus zoom the whole window in 10% steps, 60% to 140%, and Cmd 0 puts it back, like a browser's page
@@ -168,10 +168,10 @@ The MCP server ships inside the app, `Contents/MacOS/reel-mcp`, and speaks MCP o
 claude mcp add --scope user reel-editor -- "$HOME/Applications/Reel Editor.app/Contents/MacOS/reel-mcp"
 ```
 
-Tools: `list_projects create_project add_project remove_project move_project get_project cut_range restore_range delete_words restore_words correct_word
+Tools: `list_projects create_project add_project remove_project move_project get_project get_words get_paragraphs set_focus audit_audio move_range insert_clip cut_range restore_range delete_words restore_words correct_word
 trim_clip split_clip delete_clip reorder_clips add_clip undo redo set_captions set_title set_speed set_sections
 list_animation_kinds get_animations add_animation update_animation remove_animation set_animations transcribe
-import_transcript get_status export rename_project open_in_app get_app_state get_rules set_rules_folder rename_clip add_audio_overlay update_audio_overlay
+import_transcript get_status export rename_project open_in_app get_app_state get_rules set_rules_folder write_rule_book edit_rule_book delete_rule_book make_project_rules_folder rename_clip add_audio_overlay update_audio_overlay
 delete_audio_overlay mute_clip_audio transcribe_source get_logs`. Each one publishes a JSON schema, and every call is checked against it.
 
 The web editor's tools as of 31 Oct 2026 are here too, with the same names, arguments and meaning (`ToolsWeb.swift`), so
@@ -192,6 +192,8 @@ A cut or word cut made through MCP waits for Sankalp's approval (`pending` on th
 `approve_cuts`, unless the call passes `approved: true`; it plays and exports as a cut either way. A cut made in the app
 is approved at once.
 
+A long transcript is read a page at a time (Sankalp, 2 Nov 2026): `get_project` leaves out more than 1,500 words unless `words` is true and says how many in `wordsOmitted`, and `get_words` gives up to 1,500 words per page as short lines, `index start end word` in edit seconds, marked `[cut]` or `[cut, waiting]`, with a `pause` line for every silence of `pause` seconds or more (0.5 by default), from `from` or the word index `start`, with `nextStart` for the next page; a 23 minute reel is two pages of about 41,000 characters. `audit_audio` is the rule books' audio audit (the web editor's `audit-audio.py`) on the project's own files, in `Resources/audit_audio.py`: it flags a word stretched over more than 0.8 s with speech inside and speech no word covers, transcribes each spot again with WhisperX (the small model, loaded once), and returns each finding with its edit times, why and what was heard; `from` and `to` audit a part, and two minutes of a reel take about half a minute.
+
 A typical session: `list_projects`, `get_project` (clips, cuts, words with indexes and edit times, animations), then
 `delete_words` or `cut_range`, `add_animation`, check with `get_project`, and `export` with `wait: true`.
 `open_in_app` brings the project up in the window.
@@ -210,7 +212,7 @@ any session can do this from its own chat, with no listening loop:
 ## Talking to Claude from the app
 
 The Chat (the button in the transcript's head) talks to a Claude the app starts itself. The two icons beside the account
-pick where it sits, **side panel** or **floating**: a 400 point column on the right of the window or a card under the
+pick where it sits, **side panel** or **floating**: a column on the right of the window, 400 points until its divider is dragged (320 to 900, saved, a double click resets it; Sankalp, 2 Nov 2026), or a card under the
 button, and the app remembers it.
 
 The chat (`DirectChat.swift`) needs no Claude Code session: the app starts the claude command line itself, as the
@@ -219,8 +221,7 @@ LiveAssistant app does, on the account and model picked at the top of the chat (
 extra high or max), with this app's reel-mcp as its only tools (`--strict-mcp-config`,
 `--tools ""`, `--allowedTools mcp__reel-editor`). It keeps running for the conversation. Each message goes in with what
 is on screen (the project, the playhead, the clip, the selection); Claude's answers and each tool it runs show in the
-chat, and the editor reloads as its edits land. The command line signs in by itself, no token is read. The conversation
-is kept in `<projects folder>/_chat/direct.json`; every start is logged as `direct_chat_start` and every turn as
+chat, and the editor reloads as its edits land. The command line signs in by itself, no token is read. Each project has a chat of its own (Sankalp, 2 Nov 2026): a new project opens on a fresh chat, and going back to a project shows its conversation again, kept in its cache folder as `_cache/<name>/chat.json` with what it used in `chat-usage.json` (the chat with no project open is kept in `<projects folder>/_chat/direct.json`). Each one has its own Claude, started with its first message and kept while the project's tab is open, so a Claude still working on one project carries on while another is in front; closing the tab ends it, after the turn it is on. Clear clears the chat in front only. Every start is logged as `direct_chat_start` and every turn as
 `direct_chat_turn` with its tokens and cost, and the account's limits read from each turn update the MCP panel.
 `REEL_EDITOR_DIRECT_SAY=<text>` sends one message at launch, for checking it end to end.
 
@@ -233,9 +234,9 @@ the command with its `CLAUDE_CONFIG_DIR`).
 rule book: how Sankalp wants his reels edited. Each project keeps its own rules folder, `rulesDir` in its file, and a
 new project starts with the folder saved last (`rulesDir` in `settings.json`; `<projects folder>/_rules` until one is
 picked, not inside the app, which every build replaces). The rules row in the chat (under the account, model and effort)
-shows the project in front's rule books, how many and where, with Change to pick any folder in Finder for this project,
+shows the project in front's rule books, how many and where (click the count to read them: a modal over the window lists every rule book on the left and shows the one picked on the right, its markdown laid out, with Open to edit it in its own app and Show in Finder; the up and down arrows move between them, Escape closes it, and `REEL_EDITOR_RULES=1` opens it at launch for a snapshot; Sankalp, 2 Nov 2026), with Change to pick any folder in Finder for this project,
 which also becomes the folder new projects start with, Default to go back to `_rules`, and a button that shows the folder
-in Finder (`set_rules_folder` does the same for agents). When a conversation starts, the rule books of the project in
+in Finder (`set_rules_folder` does the same for agents). Agents can write rule books too (Sankalp, 2 Nov 2026), so the chat's Claude makes custom rules for a project when asked: `write_rule_book` writes a new book or a whole new text for one, `edit_rule_book` replaces exact text in one, and `delete_rule_book` takes one out, each keeping the text it had in the folder's hidden `.previous` folder, which is never read as a rule book. Their answers name the other projects that read the same folder, and rules meant for one project go into a folder of its own made by `make_project_rules_folder`: `<projects folder>/_rules-by-project/<name>`, with copies of the rule books the project read until then, without changing the folder new projects start with. The rules row reads the folder again after each of Claude's turns. When a conversation starts, the rule books of the project in
 front go into Claude's system prompt once,
 through a temporary file passed with `--system-prompt-file`, so they hold for the whole conversation, and one line
 above the first message says how many were sent with the request; later messages do not repeat it. Asked to read the
@@ -247,6 +248,10 @@ other text is kept, and the new one saved beside it with a number, such as `cuts
 of them with the next message and reads them with `get_rules`. When a message is sent from a project whose rules
 folder is not the one the conversation started with (another tab, or a folder changed meanwhile), the message tells
 Claude where that project's rule books are and to read them with `get_rules` before editing it.
+
+The chat's Claude has no shell and no file reader, only the editor's tools, so its system prompt tells it to read the words with `get_words`, to call `audit_audio` where a rule book says to run `audit-audio.py`, and to do a whole trim pass itself with the cuts waiting for approval; it runs with `MAX_MCP_OUTPUT_TOKENS` at 60,000 and `MCP_TOOL_TIMEOUT` at 30 minutes, so a long page and a long audit both fit (Sankalp, 2 Nov 2026). Claude's answers show as formatted markdown. The conversation reads as one timeline (Sankalp, 2 Nov 2026): every row's icon sits in one column with the Claude mark, joined by a line; a tool call has its time on the right, and a message has it under its bubble, Sankalp's messages on the right with his icon beside them and Claude's on the left, each bubble at most 80% of the chat's width (Sankalp, 2 Nov 2026); each tool call has its own icon and what it worked on (the times of a cut, the paragraph read), and a run of the same tool is one row, such as cut range 34 times, last 22:55 to 22:59, which opens to list each call with its time. Separators set off the status row and the rule books row. Two rows right above the input show what this chat has used since it was last cleared, the tokens first and the rest under them: its tokens, its share of the account's 5 hour limit (estimated as the MCP panel estimates the editor's, the account's use times this chat's part of the tokens the account spent in the window, the chat's own turns added since it keeps no transcript), the turns and the tools Claude ran, with the tokens by kind and the account's own use on hover; no money is shown, since a subscription does not pay what the command line reports (Sankalp, 2 Nov 2026). It is kept in `_chat/direct-usage.json` and cleared with Clear. While Claude works, the send button is a stop button: it interrupts the turn the way the Agent SDK does (a `control_request` of subtype interrupt), so the conversation and what Claude knows are kept for the next message; a Claude that has not stopped in five seconds is ended.
+
+**What Claude is working on, live in the transcript** (Sankalp, 2 Nov 2026). An agent's `get_words`, `audit_audio`, `cut_range` and `delete_words` write what they touch to `_cache/<name>/focus.json` (Reading paragraph 3 of 31, Auditing the sound, Applying trims), and `set_focus` says anything else in Claude's own words; the app reads it twice a second, lights up those paragraphs with a breathing blue wash and a tag such as "Claude is applying trims", scrolls them into view unless the video plays, and shows the same line under Claude is working in the chat. Every paragraph of the span being worked on is blue, however many Claude reads at once, as long as it still has a kept or waiting word, the tag on the first one gives the times when no paragraph is named, and the timeline shows the same span as a blue band and scrolls to it; only work over nearly the whole reel, such as the audit of all of it, is one line at the top of the transcript instead, and the audit then moves through the reel as it listens again to each spot it found. Once Claude starts reading the reel, the paragraphs it has not reached yet wait in yellow while it works, and each goes back to plain once Claude has been through it; the paragraphs it went through are kept across its turns, so continue picks up where it was, and Clear in the chat starts over. A paragraph with cuts that wait for approval has no outline of its own: its cut words are amber, the words of a waiting range cut too, and Approve at the top counts them (Sankalp, 2 Nov 2026). While Claude works on a reel the words in that span shimmer, the whole reel when it reads all of it, and Sankalp's own edits wait so the two never undo each other: every edit from the app is held at `EditorModel.run`, the editing buttons and Add layer are greyed, the timeline's clips, voice overs and animations and the clip heads take no drags, renaming waits, and a pill in the timeline's toolbar says Claude is editing, with Stop. Playing, reading, selecting, comments and export still work (Sankalp, 2 Nov 2026). It lets go when the turn ends, on Stop, or after 90 seconds without a call. `get_paragraphs` gives the transcript's paragraphs as the app draws them (`transcriptParagraphs` in `Focus.swift`), and the chat's Claude is told to make a trim pass paragraph by paragraph: the audit once, then each paragraph read with `get_words paragraph n`, cut, and on to the next, unless Sankalp asks otherwise.
 
 One conversation keeps one Claude: a message half an hour later still goes to the Claude that made the earlier edits,
 and it remembers them. Quitting the app, Stop, or picking another account, model or effort starts a new Claude that
@@ -271,9 +276,19 @@ them back (`errors_only` for the failures), so a QA pass starts with one call.
 As in the web editor: **Wide** (the transcript and the video side by side, the timeline across the bottom, the default for
 a landscape video), **Tall** (the video full height on the right, the timeline under the transcript, the default for a
 portrait video) and **Distraction free** (only the video; Escape leaves). The buttons sit in the transport bar. The
-divider between the transcript and the video and the one above the timeline can be dragged, a double click resets
-them, and the layout per kind of video, the timeline's height and the video's width are kept. A taller timeline gives
-the extra room to the filmstrip and the waveform.
+divider between the transcript and the video and the one above the timeline can be dragged, a double click resets them (the timeline to the height of its layers), and the layout per kind of video, the timeline's height and the video's width are kept. Every layer of the timeline has a height of its own that never changes (Sankalp, 2 Nov 2026): the ruler 28 points, the animation layer 36, the video 80, the audio 40, voice and face 32 and the captions 24, with 8 between them. Dragging the timeline taller leaves empty room under the last layer, and dragging it shorter, down to 96 points, lets it scroll up and down. The lanes are one scroll view that scrolls both ways, so the scroll bar to move along the reel sits at the timeline's bottom edge, not under the captions, and the layer names follow the lanes up and down.
+
+## A reel of several videos
+
+Decided by Sankalp on 2 Nov 2026. The transcript reads as the reel plays: clip by clip, in the order of the clips, each with the words of its own video between its in and out (`transcriptLayout` in `Arrange.swift`, the same paragraphs `get_paragraphs` gives an agent). When a reel has more than one clip each clip starts with a head naming its video, the part of it that plays and its length; drag a head onto another to put that clip before it (`reorder_clips`). A clip whose video has no words yet still shows, with a line saying so. The words of the other videos are selected, cut, restored and commented on like the project's own, by their times (`cut_range`, a comment on a range), since word indexes belong to the project's own video; a selection stays among one kind of word.
+
+For agents: `move_range` takes the part from `start` to `end` (edit seconds) and puts it at `to`, splitting the clips at the three points and reordering them with the cuts inside; `insert_clip` puts the part `in` to `out` of a video (`main`, a source id such as `s1`, or the path of another video, which is added) at the edit time `at`, splitting the clip playing there; `get_words` with `video` reads one video's own words in its own seconds, each marked with where the reel plays it or that it does not, so a part left out can be put back. Each is one undo step in the project's file, the videos are only ever read, and the app lights up where the part lands, naming its video (Moving 0:01 to 0:02 here, Placing 0:00 to 0:01 of test.mp4 here). get_paragraphs and get_words go clip by clip and name each clip's video, and Reading paragraph 3 of 12, from IMG_0042.mov says which video Claude is reading.
+
+Transcribing a reel of several videos (Sankalp, 2 Nov 2026): a new project starts transcribing at once, and every video with sound is transcribed one after another, the project's own video first and then the others in the order their clips play (`Jobs.transcribeAll`). A video that fails or has no speech does not stop the rest; the status says which one it is on ("IMG_4878.MOV, 2 of 8") and, at the end, how many words came from how many videos and which could not be transcribed. The app's Transcribe button and the `transcribe` tool do the same, the tool doing the project's own video again. The status keeps the id of the process running the job, so a transcription cut off when the app quits or is rebuilt picks up when the project opens again, the videos already done keeping their words. Until 2 Nov 2026 every WhisperX run in the app failed with "has no words": its output file, `media/words-<id>.raw.json`, was taken for words kept in the project's file and looked for there; it is now `whisperx-<id>.json`, and only `words-<hash>.json` names are parts of the document.
+
+When a reel has more than one clip, each clip's head has a dot beside it on the line that joins the paragraphs, so the clips and their words read as one timeline, as the chat's rows do (Sankalp, 2 Nov 2026).
+
+**Notifications** (Sankalp, 2 Nov 2026, `Notify.swift`). The app sends a macOS notification when a transcription or an export of an open project ends, from the app or an agent, with how it went, and when the chat's Claude finishes what it was asked, with its last words; they show while the app is in front too, and a click brings that project's tab forward. macOS asks once for leave; Notifications in App settings turns them off. A build outside an app bundle (`swift build`, snapshot runs) sends none. During a transcription of several videos the status stays at transcribing between videos, so only the end of the whole run notifies.
 
 ## Clips, muted sound and voice overs
 
@@ -306,7 +321,7 @@ WhisperX venv in `~/Coding projects/WhisperX/venv`. To point it elsewhere, set `
 Drag across words in the transcript, or click one and shift click another, to select them; a menu floats at the
 selection with Cut, Uncut, Correct (retype the words, one for each selected) and Comment for Claude (left on the words
 with add_comment for an agent to pick up), as the web editor's selection menu. A range dragged on the timeline gets the
-same menu without Correct. Escape lets go of a selection. `REEL_EDITOR_SELECT=words:5-9` or `range:1.5-3` opens with a
+same menu without Correct. Escape lets go of a selection. A comment left there is saved on the reel and sent straight to the chat's Claude as a message of Sankalp's, with the words or the range it is on and its id, so Claude acts on it and resolves it; while Claude works on something else it waits and goes when that turn ends, or at once after Stop (Sankalp, 2 Nov 2026). `REEL_EDITOR_SELECT=words:5-9` or `range:1.5-3` opens with a
 selection, for checking the menus in a snapshot.
 
 In any text field (the chat's input, the title, a name or a number), the keys work as in any Mac text field: Cmd Delete
@@ -315,7 +330,7 @@ share those keys (Cut Selection, Undo Edit) see them (`TextKeys` in `ReelEditorA
 
 Space plays, Delete cuts the selection (a dragged range on the timeline, or words selected in the transcript),
 Shift Delete restores it, S splits at the playhead, the arrows step a frame (a second with Shift), and = and - zoom
-the timeline in and out. Cmd plus, Cmd minus and Cmd 0 zoom the whole window. Cmd E exports. Cmd Z and Shift Cmd Z undo
+the timeline in and out. Cmd or Ctrl with the scroll wheel, or a two finger scroll, zooms the timeline around the pointer while it is over the timeline (Sankalp, 2 Nov 2026). Cmd plus, Cmd minus and Cmd 0 zoom the whole window. Cmd E exports. Cmd Z and Shift Cmd Z undo
 and redo. Drag an animation block to move it, or drag its edges to stretch it.
 
 ## Planned: individual layers

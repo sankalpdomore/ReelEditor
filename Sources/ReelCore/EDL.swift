@@ -414,10 +414,10 @@ public func exportFlags(_ edl: Edl, hasWords: Bool) -> (captions: Bool, title: B
 
 public struct OpResult { public var edl: Edl; public var info: [String: JSON] = [:] }
 
-private func materialize(_ edl: Edl, _ main: EdlMain) -> Edl { var e = edl; if e.clips == nil { e.clips = [defaultClip(main)] }; return e }
-private func nextId(_ prefix: String, _ taken: [String]) -> String { var n = 1; while taken.contains("\(prefix)\(n)") { n += 1 }; return "\(prefix)\(n)" }
-private func sourceDuration(_ edl: Edl, _ main: EdlMain, _ id: String) -> Double { id == MAIN ? main.duration : edl.sources.first { $0.id == id }?.duration ?? 0 }
-private func findClip(_ edl: Edl, _ id: String) throws -> Clip {
+func materialize(_ edl: Edl, _ main: EdlMain) -> Edl { var e = edl; if e.clips == nil { e.clips = [defaultClip(main)] }; return e }
+func nextId(_ prefix: String, _ taken: [String]) -> String { var n = 1; while taken.contains("\(prefix)\(n)") { n += 1 }; return "\(prefix)\(n)" }
+func sourceDuration(_ edl: Edl, _ main: EdlMain, _ id: String) -> Double { id == MAIN ? main.duration : edl.sources.first { $0.id == id }?.duration ?? 0 }
+func findClip(_ edl: Edl, _ id: String) throws -> Clip {
   guard let c = edl.clips?.first(where: { $0.id == id }) else { throw EdlError("no_such_clip", "No clip with id \(id). Clips: \((edl.clips ?? []).map(\.id).joined(separator: ", "))") }
   return c
 }
@@ -425,7 +425,7 @@ private func findClip(_ edl: Edl, _ id: String) throws -> Clip {
 // When clips ripple (one is deleted, trimmed or put in before others) the audio overlays that start at or after edit time `at`
 // move by `delta` with the picture that follows. One that started inside a removed span moves to its start. Splitting and
 // reordering move nothing.
-private func rippleOverlays(_ edl: Edl, at: Double, delta: Double, removedTo: Double? = nil) -> (overlays: [AudioOverlay]?, moved: [JSON]) {
+func rippleOverlays(_ edl: Edl, at: Double, delta: Double, removedTo: Double? = nil) -> (overlays: [AudioOverlay]?, moved: [JSON]) {
   guard let list = edl.audioOverlays, !list.isEmpty else { return (edl.audioOverlays, []) }
   var moved: [JSON] = []
   let next = list.map { o -> AudioOverlay in

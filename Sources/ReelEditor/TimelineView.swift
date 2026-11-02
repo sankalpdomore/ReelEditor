@@ -6,16 +6,16 @@ import ReelCore
 import SwiftUI
 
 // Where each lane sits, top to bottom, in the web timeline's order: the ruler, the animation layer, the video, its
-// sound, the voice over and the words (the captions). A taller timeline (drag its divider up) gives the extra room to
-// the filmstrip and the waveform, as the web editor does.
+// sound, the voice over and the words (the captions). Every layer has a height of its own that never changes, and the
+// timeline's height is dragged apart from them (Sankalp, 2 Nov 2026): the room past the last layer is left empty, and a
+// timeline shorter than its layers scrolls up and down. The video is 80 points, the waveform 40.
 struct Lanes: Equatable {
-  static let minHeight: Double = 260
+  static let minHeight: Double = Lanes().height // the whole timeline's lanes; the name is kept from when it could grow
   let ruler: ClosedRange<Double>, video: ClosedRange<Double>, audio: ClosedRange<Double>, words: ClosedRange<Double>, voice: ClosedRange<Double>, anim: ClosedRange<Double>
   let height: Double
 
-  init(height h: Double = Lanes.minHeight) {
-    let extra = max(0, h - Lanes.minHeight)
-    let vh = 60 + extra * 0.6, ah = 38 + extra * 0.4
+  init() {
+    let vh: Double = 80, ah: Double = 40
     ruler = 0...28
     anim = 32...68
     video = 76...(76 + vh)
@@ -38,24 +38,30 @@ func timecode(_ t: Double) -> String {
 
 struct TimelineView: View {
   @ObservedObject var model: EditorModel
-  var height: Double = Lanes.minHeight + 14 // the panel's height, set by dragging its divider
+  var height: Double = Lanes.minHeight + 14 // the height under the toolbar, set by dragging its divider
   @State private var dragFrom: Double? = nil
   @State private var scrollX: Double = 0 // how far the lanes are scrolled, for zooming around the pointer
+  @State private var scrollY: Double = 0 // and down, for the names column to follow
   @State private var pinchBase: Double? = nil
-  @State private var position = ScrollPosition(edge: .leading)
+  @State private var wheel = TimelineWheel()
+  @State private var position = ScrollPosition(point: .zero)
   // The gap between the layer names and time zero, and after the end, as the web timeline has them (LABEL_GAP 48, PAD 24).
   static let pad: Double = 48
   static let endPad: Double = 24
 
   var body: some View {
-    let lanes = Lanes(height: height - 14)
+    let lanes = Lanes()
     let width = max(1, model.plan.editDuration) * model.zoom
     let tiles = Int(ceil(width / TILE))
+    // The lanes scroll both ways in one scroll view, so its scroll bars sit at the timeline's bottom and right edges
+    // however tall it is dragged (Sankalp, 2 Nov 2026); the names column follows the lanes up and down.
     HStack(spacing: 0) {
     LaneNames(model: model)
+      .offset(y: -scrollY)
+      .frame(width: 160, height: height, alignment: .topLeading)
+      .clipped()
     Hairline(vertical: true)
-    ScrollViewReader { proxy in
-      ScrollView(.horizontal) {
+      ScrollView([.horizontal, .vertical]) {
         ZStack(alignment: .topLeading) {
           LazyHStack(spacing: 0) {
             ForEach(0..<tiles, id: \.self) { i in
@@ -64,12 +70,13 @@ struct TimelineView: View {
                 .id(i)
             }
           }
-          ClipHitLane(model: model)
+          ClipHitLane(model: model).allowsHitTesting(!model.claudeEditing) // no trims or moves while Claude edits
+          FocusBand(model: model)
           SelectionBand(model: model)
           RangeMenu(model: model)
-          VoiceOverLane(model: model)
-          AnimationLane(model: model)
-          Playhead(model: model, clock: model.clock, proxy: proxy)
+          VoiceOverLane(model: model).allowsHitTesting(!model.claudeEditing)
+          AnimationLane(model: model).allowsHitTesting(!model.claudeEditing)
+          Playhead(model: model, clock: model.clock) { x in position.scrollTo(point: CGPoint(x: x, y: scrollY)) }
         }
         .frame(width: width, height: lanes.height, alignment: .topLeading)
         .contentShape(Rectangle())
@@ -87,26 +94,78 @@ struct TimelineView: View {
           dragFrom = nil
         })
         .padding(.leading, Self.pad).padding(.trailing, Self.endPad)
+        // A click in the gap before time zero takes the playhead to the start, and in the gap after the end to the end
+        // (Sankalp, 2 Nov 2026).
+        .background(Color.clear.contentShape(Rectangle()).onTapGesture { p in
+          model.selection = nil; model.selectedWords = nil; model.selectedAnimation = nil
+          model.seek(p.x < Self.pad ? 0 : model.plan.editDuration)
+        })
       }
       .scrollPosition($position)
-      .onScrollGeometryChange(for: Double.self, of: { $0.contentOffset.x }) { _, x in scrollX = x }
+      .defaultScrollAnchor(.topLeading) // lanes smaller than the timeline sit at its top left, not in its middle
+      .scrollBounceBehavior(.basedOnSize)
+      .onScrollGeometryChange(for: CGPoint.self, of: { $0.contentOffset }) { _, o in scrollX = o.x; scrollY = max(0, o.y) }
       // A trackpad pinch zooms the timeline, keeping the moment under the fingers where it is.
       .simultaneousGesture(MagnifyGesture()
         .onChanged { v in
           let base = pinchBase ?? model.zoom
           pinchBase = base
-          let p = v.startLocation.x
-          let t = (scrollX + p - Self.pad) / model.zoom
-          let z = max(1, min(160, base * v.magnification))
-          model.zoom = z
-          position.scrollTo(x: max(0, t * z + Self.pad - p))
+          zoom(to: base * v.magnification, around: v.startLocation.x)
         }
         .onEnded { _ in pinchBase = nil })
+      // Where the pointer is over the lanes, for zooming with the wheel around it.
+      .onContinuousHover { phase in
+        if case .active(let p) = phase { wheel.hoverX = p.x } else { wheel.hoverX = nil }
+      }
     }
+    .onAppear {
+      wheel.zoom = { factor, p in zoom(to: model.zoom * factor, around: p) }
+      wheel.start()
     }
-    .frame(height: lanes.height + 14, alignment: .top)
+    // The timeline scrolls to what Claude works on, as the transcript does, unless the video is playing.
+    .onChange(of: model.agentFocus?.start) { _, s in
+      guard let s, !model.clock.playing else { return }
+      withAnimation(.easeInOut(duration: 0.4)) { position.scrollTo(point: CGPoint(x: max(0, s * model.zoom - 48), y: scrollY)) }
+    }
+    .onDisappear { wheel.stop() }
+    .frame(height: height, alignment: .top)
     .environment(\.lanes, lanes)
     .background(Ink.page)
+  }
+
+  // Zooms the timeline to z points per second, keeping the moment at p (points from the lanes' left edge) where it is.
+  func zoom(to z: Double, around p: Double) {
+    let t = (scrollX + p - Self.pad) / model.zoom
+    let z = max(1, min(160, z))
+    model.zoom = z
+    position.scrollTo(point: CGPoint(x: max(0, t * z + Self.pad - p), y: scrollY))
+  }
+}
+
+// Command or Control with the mouse wheel, or a two finger scroll, zooms the timeline around the pointer while the
+// pointer is over it, as a pinch does (Sankalp, 2 Nov 2026). Up or away zooms in. Without the keys, scrolling scrolls.
+final class TimelineWheel {
+  var hoverX: Double? = nil
+  var zoom: ((Double, Double) -> Void)? = nil
+  private var monitor: Any? = nil
+
+  func start() {
+    guard monitor == nil else { return }
+    monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
+      guard let self, let p = self.hoverX, !e.modifierFlags.intersection([.command, .control]).isEmpty else { return e }
+      // The way the wheel or fingers moved, whatever the natural scrolling setting.
+      let d = (e.isDirectionInvertedFromDevice ? -1 : 1) * Double(e.scrollingDeltaY)
+      if d == 0 { return abs(e.scrollingDeltaX) > 0 ? nil : e }
+      // A trackpad sends points, a mouse wheel sends lines: one notch of a wheel is the same step as = and -.
+      let factor = e.hasPreciseScrollingDeltas ? exp(max(-40, min(40, d)) * 0.01) : pow(1.25, max(-4, min(4, d)))
+      self.zoom?(factor, p)
+      return nil
+    }
+  }
+
+  func stop() {
+    if let monitor { NSEvent.removeMonitor(monitor) }
+    monitor = nil
   }
 }
 
@@ -120,6 +179,7 @@ struct LaneNames: View {
     ZStack(alignment: .topLeading) {
       Button { adding.toggle() } label: { name("Add layer", "plus") }
         .buttonStyle(.plain)
+        .disabled(model.claudeEditing).opacity(model.claudeEditing ? 0.4 : 1)
         .frame(height: lanes.ruler.upperBound - lanes.ruler.lowerBound)
         .popover(isPresented: $adding, arrowEdge: .trailing) {
           OptionList(options: [("clip", "Video clip at the end"), ("audio", "Audio at the playhead"), ("face", "Face video at the playhead")] + ANIMATION_KINDS.map { ("anim:" + $0.id, "Animation: " + $0.title) },
@@ -179,7 +239,9 @@ struct TimelineTile: View {
       while t <= t1 + major {
         let label = ctx.resolve(Text(timecode(max(0, t)).replacingOccurrences(of: ".00", with: "")).font(.inter(12)).foregroundStyle(Ink.secondary))
         let w = label.measure(in: CGSize(width: 200, height: 20)).width
-        if t >= 0 { ctx.draw(label, at: CGPoint(x: x(t), y: 14), anchor: .center); labels.append((x(t) - w / 2 - 6)...(x(t) + w / 2 + 6)) }
+        // The label at time zero starts at the left edge rather than centring on it, so it is not cut in half (Sankalp, 2 Nov 2026).
+        if t == 0 { ctx.draw(label, at: CGPoint(x: x(t), y: 14), anchor: .leading); labels.append((x(t) - 6)...(x(t) + w + 6)) }
+        else if t > 0 { ctx.draw(label, at: CGPoint(x: x(t), y: 14), anchor: .center); labels.append((x(t) - w / 2 - 6)...(x(t) + w / 2 + 6)) }
         t += major
       }
       t = (t0 / minor).rounded(.down) * minor
@@ -290,6 +352,24 @@ struct TimelineTile: View {
   }
 }
 
+// What Claude is working on, as a blue band over the lanes with its action at the top, the same span the transcript
+// lights up (Sankalp, 2 Nov 2026).
+struct FocusBand: View {
+  @Environment(\.lanes) private var lanes
+  @ObservedObject var model: EditorModel
+  @State private var on = false
+  var body: some View {
+    if let f = model.agentFocus {
+      Rectangle().fill(Ink.focus.opacity(on ? 0.14 : 0.06))
+        .overlay(Rectangle().stroke(Ink.focus.opacity(0.6), lineWidth: 1))
+        .frame(width: max(2, (f.end - f.start) * model.zoom), height: lanes.words.upperBound - lanes.anim.lowerBound)
+        .offset(x: f.start * model.zoom, y: lanes.anim.lowerBound)
+        .allowsHitTesting(false)
+        .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { on = true } }
+    }
+  }
+}
+
 struct SelectionBand: View {
   @Environment(\.lanes) private var lanes
   @ObservedObject var model: EditorModel
@@ -313,7 +393,12 @@ struct RangeMenu: View {
     if let s = model.selection, s.e - s.s > 0.05 {
       SelectionMenu(canCut: true, canUncut: model.plan.cuts.contains { $0.e > s.s && $0.s < s.e },
         cut: { model.cutSelection() }, uncut: { model.restoreSelection() },
-        comment: { t in model.run("add_comment", ["start": .number(round3(s.s)), "end": .number(round3(s.e)), "comment": .string(t)]) })
+        comment: { t in
+          let on = "the range \(timecode(s.s)) to \(timecode(s.e)) of the timeline (edit seconds \(round3(s.s)) to \(round3(s.e)))"
+          model.run("add_comment", ["start": .number(round3(s.s)), "end": .number(round3(s.e)), "comment": .string(t)]) { res in
+            DirectChat.shared.sendComment(t, on: on, id: res["comment"]?["id"]?.string)
+          }
+        })
         .offset(x: max(0, s.s * model.zoom), y: lanes.anim.lowerBound)
         .id("\(s.s)-\(s.e)")
     }
@@ -324,7 +409,7 @@ struct Playhead: View {
   @Environment(\.lanes) private var lanes
   @ObservedObject var model: EditorModel
   @ObservedObject var clock: Clock
-  let proxy: ScrollViewProxy
+  let follow: (Double) -> Void // scrolls the lanes to an x, keeping how far down they are
 
   var body: some View {
     let x = clock.time * model.zoom
@@ -335,7 +420,7 @@ struct Playhead: View {
     .offset(x: x - 1)
     .allowsHitTesting(false)
     .onChange(of: Int(x / TILE)) { _, tile in
-      if clock.playing && model.follow { withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(tile, anchor: .leading) } }
+      if clock.playing && model.follow { withAnimation(.easeInOut(duration: 0.25)) { follow(Double(tile) * TILE + TimelineView.pad) } }
     }
   }
 }
