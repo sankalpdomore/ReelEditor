@@ -15,7 +15,7 @@ os.makedirs(os.path.join(HOME, "_music"))
 shutil.copy(os.path.join(MEDIA, "music.m4a"), os.path.join(HOME, "_music", "bed.m4a"))
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env = dict(os.environ, REEL_EDITOR_HOME=HOME, REEL_EDITOR_NO_OPEN="1",
-           REEL_WHISPERX_SCRIPT=os.path.join(REPO, "Resources", "transcribe_whisperx.py"), REEL_AUDIT_SCRIPT=os.path.join(REPO, "Resources", "audit_audio.py"))
+           REEL_WHISPERX_SCRIPT=os.path.join(REPO, "Resources", "transcribe_whisperx.py"), REEL_AUDIT_SCRIPT=os.path.join(REPO, "Resources", "audit_audio.py"), REEL_NO_TRASH="1")
 proc = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
 nid = 0
 results = []
@@ -644,8 +644,13 @@ ok("reveal_in_finder", {"reel": B, "url": f"{base}/busy.mp4"}, "reveal_in_finder
 r = ok("rename_reel", {"project": "colour", "to": "colour-renamed"})
 check("rename_reel moved the folder", os.path.exists(os.path.join(HOME, "colour-renamed.reel.json")) and r.get("from") == "colour", r)
 bad("rename_reel", {"project": "colour-renamed", "to": B}, "exists", "rename_reel onto a taken name")
+before_doc = json.load(open(os.path.join(HOME, "colour-renamed.reel.json")))
 r = ok("rename_project", {"project": "colour-renamed", "title": "Colour Bars"})
 check("rename_project still works", r.get("project") == "colour-bars", r)
+after_doc = json.load(open(os.path.join(HOME, "colour-bars.reel.json")))
+check("a rename copies the file whole before letting the old one go", not os.path.exists(os.path.join(HOME, "colour-renamed.reel.json")) and after_doc.get("name") == "colour-bars" and after_doc.get("history") == before_doc.get("history") and after_doc.get("animations") == before_doc.get("animations") and set(after_doc) == set(before_doc), sorted(after_doc))
+rec = ok("get_project", {"project": "colour-bars", "words": False}).get("recorded", "")
+check("get_project says when the video was recorded", re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", rec) is not None, rec)
 
 # Schema checks on a few more
 bad("approve_cuts", {"project": B, "cuts": "x1"}, "invalid_input", "approve_cuts cuts must be a list")

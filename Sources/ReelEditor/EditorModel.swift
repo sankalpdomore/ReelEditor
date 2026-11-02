@@ -383,6 +383,17 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
     run("delete_clip", ["clip": .string(c.id)])
   }
 
+  // Asks the chat's Claude to name the project from its script by the rule books' naming rule and rename it (Sankalp,
+  // 2 Nov 2026). The rename copies the project file under the new name and checks it before the old one goes to the
+  // Trash, and the tab, its chat and the playhead follow the project to its new name.
+  func nameFromScript() {
+    if editingNow { error = Self.lockedNote; return }
+    if UserDefaults.standard.string(forKey: "chatDock") == "side" { UserDefaults.standard.set(true, forKey: "chatSide") }
+    else if floating != .chat { toggle(.chat) }
+    let extra = "\n\nRead the script (get_project, which also says when the video was recorded, and get_words) and the naming rule in the rule books (get_rules if you have not read it). Make the project's name by that rule. Where the rule books give none, use the date the video was recorded as year-month-day, then two to four words saying what the video is about, lowercase with dashes, for example 2026-11-02-spare-imac-for-claude. Then call rename_project with that name as the title, and tell Sankalp the old name and the new one in one line. The app copies the project file under the new name and checks it before the old file goes to the Trash, and its tab follows."
+    DirectChat.shared.send("Name this project from its script, by the naming rule in the rule books.", context: AppModel.shared.screenContext(), extra: extra)
+  }
+
   func addAnimation(_ kind: AnimationKind) {
     let start = round3(clock.time)
     var args: [String: JSON] = ["kind": .string(kind.id), "start": .number(start), "end": .number(round3(min(start + kind.defaultLength, max(start + 0.5, plan.editDuration)))), "side": "right"]

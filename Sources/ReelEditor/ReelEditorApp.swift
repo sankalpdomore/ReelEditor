@@ -127,6 +127,7 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
     if let e = editors[name] { return e }
     do {
       let e = EditorModel(try Store.load(name)); e.start(); editors[name] = e
+      if let t = resumeAt.removeValue(forKey: name) { DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { e.seek(t) } }
       Store.touch(name)
       Log.write("app", "open_project", args: ["project": .string(name), "file": .string(Store.document(name)?.path ?? "")])
       // A transcription cut off when the app last quit picks up where it was: the videos that have their words keep them.
@@ -207,9 +208,13 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
     } catch { self.error = String(describing: error) }
   }
 
+  // A renamed project keeps its tab, its chat and its playhead (Sankalp, 2 Nov 2026): the editor opens again under the new
+  // name at the moment it was on.
+  private var resumeAt: [String: Double] = [:]
   private func follow(_ old: String, _ new: String) {
     known.insert(new)
     DirectChat.shared.renamed(old, new)
+    if let t = editors[old]?.clock.time, t > 0 { resumeAt[new] = t }
     editors[old]?.stop()
     editors[old] = nil
   }
@@ -627,9 +632,10 @@ struct ProjectSettingsMenu: View {
 
   var menu: MenuHost.Menu {
     MenuHost.Menu(anchor: frame,
-                  options: [("settings", "Project details"), ("finder", "Show in Finder"), ("move", "Move to another folder…")],
-                  selected: nil, icons: ["settings": "sliders-horizontal", "finder": "folder-open", "move": "folder-simple"]) { [app, model, name] id in
+                  options: [("settings", "Project details"), ("name", "Name it from the script"), ("finder", "Show in Finder"), ("move", "Move to another folder…")],
+                  selected: nil, icons: ["settings": "sliders-horizontal", "name": "sparkle", "finder": "folder-open", "move": "folder-simple"]) { [app, model, name] id in
       switch id {
+      case "name": model.nameFromScript()
       case "settings": model.toggle(.project)
       case "finder": if let f = Store.document(name) { NSWorkspace.shared.activateFileViewerSelecting([f]) }
       case "move": DispatchQueue.main.async { app.move(name) }

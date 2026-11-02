@@ -554,13 +554,32 @@ public enum Store {
     guard let from = document(name) else { throw ToolError("not_found", "No project called \(name)") }
     let to = from.deletingLastPathComponent().appendingPathComponent(next + DOC_EXT)
     if fm.fileExists(atPath: to.path) { throw ToolError("exists", "\(to.path) already exists") }
-    try fm.moveItem(at: from, to: to)
-    var doc = (try? JSONSerialization.jsonObject(with: Data(contentsOf: to)) as? [String: Any]) ?? [:]
-    doc["name"] = next
-    try? writeDoc(to, doc)
-    try editRegistry { r in let e = r[name]; r[name] = nil; r[next] = Entry(path: to.standardizedFileURL.path, openedAt: e?.openedAt) }
+    // Copied first, the copy checked, and only then the old file let go (Sankalp, 2 Nov 2026): there is always a whole
+    // project file to go back to. The copy carries the new name and must read back with every part the same as the old
+    // one; if it does not, it is removed and the old file stays as it was. The old file goes to the Trash, not away.
+    try fileLock(file(name, ".doc.lock")) {
+      try fm.copyItem(at: from, to: to)
+      guard var doc = (try? JSONSerialization.jsonObject(with: Data(contentsOf: to))) as? [String: Any] else {
+        try? fm.removeItem(at: to); throw ToolError("rename_failed", "The copy of \(name) could not be read, so it was not renamed")
+      }
+      doc["name"] = next
+      do { try writeDoc(to, doc) } catch { try? fm.removeItem(at: to); throw ToolError("rename_failed", "Could not write the renamed copy: \(error.localizedDescription)") }
+      guard var old = (try? JSONSerialization.jsonObject(with: Data(contentsOf: from))) as? [String: Any],
+            var copy = (try? JSONSerialization.jsonObject(with: Data(contentsOf: to))) as? [String: Any] else {
+        try? fm.removeItem(at: to); throw ToolError("rename_failed", "The renamed copy of \(name) could not be checked, so it was not renamed")
+      }
+      old["name"] = nil; copy["name"] = nil
+      guard NSDictionary(dictionary: old).isEqual(to: copy) else {
+        try? fm.removeItem(at: to); throw ToolError("rename_failed", "The renamed copy of \(name) did not match it, so it was not renamed")
+      }
+      try editRegistry { r in let e = r[name]; r[name] = nil; r[next] = Entry(path: to.standardizedFileURL.path, openedAt: e?.openedAt) }
+    }
     let oldCache = cacheRoot.appendingPathComponent(name), newCache = cacheRoot.appendingPathComponent(next)
     if fm.fileExists(atPath: oldCache.path) && !fm.fileExists(atPath: newCache.path) { try? fm.moveItem(at: oldCache, to: newCache) }
+    // The old file now that the copy is in use: to the Trash, or removed where there is no Trash.
+    // REEL_NO_TRASH (the test suite) removes it instead, so scratch projects never fill the Trash.
+    if ProcessInfo.processInfo.environment["REEL_NO_TRASH"] != nil { try? fm.removeItem(at: from) }
+    else { do { try fm.trashItem(at: from, resultingItemURL: nil) } catch { try? fm.removeItem(at: from) } }
     var map = renames()
     for (k, v) in map where v == name { map[k] = next }
     map[name] = next

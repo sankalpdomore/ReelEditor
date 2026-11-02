@@ -175,9 +175,10 @@ struct VoiceCard: View {
     VStack(alignment: .leading, spacing: 12) {
       InsetCard(title: "Volume", icon: "speaker-high") {
         ValueSlider(label: "All the voices", range: 0...10, step: 0.05, format: { "\(Int(($0 * 100).rounded()))%" }, value: gain) { set($0) }
-        HStack(spacing: 8) {
-          ForEach([1.0, 1.5, 2.0, 3.0, 5.0], id: \.self) { g in
-            Button("\(Int(g * 100))%") { set(g) }.pill(abs(gain - g) < 0.001 ? .primary : .outline, .xs).fixedSize()
+        // Steps for the usual boosts and on up to the most, 1000% (Sankalp, 2 Nov 2026), wrapping onto a second row.
+        FlowLayout(spacing: 8, lineSpacing: 8) {
+          ForEach([1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0], id: \.self) { g in
+            Button { set(g) } label: { Text(verbatim: "\(Int(g * 100))%") }.pill(abs(gain - g) < 0.001 ? .primary : .outline, .xs).fixedSize()
           }
         }
         Note("Above 100% a limiter holds the peaks, so the voice gets louder without crackling. The music and sound effects keep their own volume.")

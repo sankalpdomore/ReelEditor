@@ -249,13 +249,18 @@ let coreTools: [ReelTool] = [
     let r = try Store.relocate(n, to: URL(fileURLWithPath: (i["folder"]!.string! as NSString).expandingTildeInPath, isDirectory: true))
     return ["project": .string(n), "file": .string(r.to.path), "previous": .string(r.from.path)]
   },
-  ReelTool(name: "get_project", description: "The whole state of a project: its clips (in and out in source seconds, editStart and editEnd in edit time), the cuts, the kept ranges, the length of the export (duration, after cuts and speed), the words with their indexes and edit times (empty without a transcript), the sections, the export options and the animation layer (each animation also has outStart and outEnd, its place in the export). Read this before editing and after, to check what an edit did. A transcript of more than 1,500 words is left out unless words is true (wordsOmitted says how many); read it a page at a time with get_words.", inputSchema: obj(["project": projectArg, "words": ["type": "boolean", "description": "Include the words. Left out, they are included up to 1,500 words. False for a shorter answer."]], ["project"])) { i in
+  ReelTool(name: "get_project", description: "The whole state of a project: its clips (in and out in source seconds, editStart and editEnd in edit time), the cuts, the kept ranges, the length of the export (duration, after cuts and speed), the words with their indexes and edit times (empty without a transcript), the sections, the export options and the animation layer (each animation also has outStart and outEnd, its place in the export). Read this before editing and after, to check what an edit did. A transcript of more than 1,500 words is left out unless words is true (wordsOmitted says how many); read it a page at a time with get_words. recorded is when the project's own video was recorded (its own creation date, else the file's), as a naming rule may start with it.", inputSchema: obj(["project": projectArg, "words": ["type": "boolean", "description": "Include the words. Left out, they are included up to 1,500 words. False for a shorter answer."]], ["project"])) { i in
     let l = try Store.load(try name(i))
     let long = l.words.count > 1500
     var state = ReelState.of(l, words: i["words"]?.bool ?? !long)
-    if long, i["words"] == nil, var o = state.object {
-      o["wordsOmitted"] = .number(Double(l.words.count)); o["extraWords"] = nil
-      o["readWordsWith"] = "get_words, a page at a time"
+    if var o = state.object {
+      if long, i["words"] == nil {
+        o["wordsOmitted"] = .number(Double(l.words.count)); o["extraWords"] = nil
+        o["readWordsWith"] = "get_words, a page at a time"
+      }
+      // When the video was recorded, in this Mac's time zone (Sankalp, 2 Nov 2026: names start with that date).
+      let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm"; f.locale = Locale(identifier: "en_US_POSIX")
+      o["recorded"] = .string(f.string(from: await Arrange.recordedAt(URL(fileURLWithPath: l.project.main.file))))
       state = .object(o)
     }
     return state
