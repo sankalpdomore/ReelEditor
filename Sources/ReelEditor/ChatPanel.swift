@@ -302,6 +302,10 @@ struct ChatItemRow: View {
           .contentShape(Rectangle()).onTapGesture { AppModel.shared.openRules() }
           .help("Read the rule books")
       }
+    case "note":
+      TimelineRow(last: last, first: first, time: m.t) { Icon("arrows-clockwise", size: 12).foregroundStyle(Ink.muted) } content: {
+        Text(m.text).font(.inter(12)).foregroundStyle(Ink.faint).frame(maxWidth: .infinity, alignment: .leading)
+      }
     case "error":
       TimelineRow(last: last, first: first, time: m.t) { Icon("warning-circle", size: 12).foregroundStyle(Ink.red) } content: {
         Text(m.text).font(.inter(12)).foregroundStyle(Ink.red).frame(maxWidth: .infinity, alignment: .leading)

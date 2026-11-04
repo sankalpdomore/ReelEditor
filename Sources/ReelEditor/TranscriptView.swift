@@ -55,7 +55,9 @@ struct TranscriptView: View {
   @State private var frames = WordFrames()
 
   var body: some View {
-    if model.words.isEmpty {
+    // With no words at all, the clips are still listed in the order they play, each with its video's name and place in
+    // the reel, so the pane is never blank (Sankalp, 4 Nov 2026); only a project with no clips shows the empty state.
+    if model.paragraphs.isEmpty {
       VStack(spacing: 12) {
         Icon("chat-text", size: 32).foregroundStyle(Ink.muted)
         Text(model.loaded.project.main.hasAudio ? "No transcript yet" : "This video has no sound").font(.inter(16, .semibold)).foregroundStyle(Ink.strong)
@@ -76,13 +78,24 @@ struct TranscriptView: View {
             // Every paragraph in what Claude works on shimmers, the whole reel when it reads all of it (Sankalp, 2 Nov 2026).
             let working = Set(model.agentFocus.map(model.paragraphIds) ?? [])
             let clips = Set(model.paragraphs.map(\.clip)).count
+            if model.words.isEmpty { TranscribeBar(model: model).padding(.leading, 72).padding(.bottom, 16) }
             ForEach(model.paragraphs) { p in
               let part = titled.firstIndex(of: p.id)
               // With more than one clip, each clip starts with its video's name, dragged to put the clips in a new order.
-              if p.clipStart && clips > 1 { ClipHeadRow(model: model, p: p, first: p.id == model.paragraphs.first?.id) }
-              TranscriptParagraph(model: model, p: p, part: part, last: p.id == model.paragraphs.last?.id, frames: frames,
-                                  focus: lit.contains(p.id), focusLabel: p.id == lit.first ? model.agentFocus.map(Self.tag) : nil, shimmer: working.contains(p.id))
-                .id(p.id)
+              let head = p.clipStart && (clips > 1 || model.words.isEmpty), lit1 = lit.contains(p.id)
+              // A clip's first paragraph that Claude works on has its blue box round the clip's head too, from the head's
+              // top to the paragraph's last line (Sankalp, 4 Nov 2026).
+              VStack(alignment: .leading, spacing: 0) {
+                if head { ClipHeadRow(model: model, p: p, first: p.id == model.paragraphs.first?.id) }
+                TranscriptParagraph(model: model, p: p, part: part, last: p.id == model.paragraphs.last?.id, frames: frames,
+                                    focus: lit1, glow: !head, focusLabel: p.id == lit.first ? model.agentFocus.map(Self.tag) : nil, shimmer: working.contains(p.id))
+                  .id(p.id)
+              }
+              .background(alignment: .topLeading) {
+                // The head starts 72 points in and the paragraph's words end 24 points above its bottom: the box reaches
+                // 8 points past both, as a paragraph's own box does.
+                if head && lit1 { FocusGlow().padding(EdgeInsets(top: -8, leading: 64, bottom: 16, trailing: -8)).transition(.opacity) }
+              }
             }
             ExtraTranscript(model: model)
           }
@@ -201,6 +214,7 @@ struct TranscriptParagraph: View {
   let last: Bool
   let frames: WordFrames
   var focus = false // Claude is working on this paragraph
+  var glow = true // its own blue box; false when the box is drawn round its clip's head and it together
   var focusLabel: String? = nil // what it is doing, on the first such paragraph
   var shimmer = false // inside what Claude works on now
 
@@ -235,7 +249,7 @@ struct TranscriptParagraph: View {
       // through it (Sankalp, 2 Nov 2026). A paragraph whose cuts wait for approval has no box of its own: its cut words
       // show it, and Approve at the top (Sankalp, 2 Nov 2026).
       .background {
-        if focus { FocusGlow().padding(-8).transition(.opacity) }
+        if focus { if glow { FocusGlow().padding(-8).transition(.opacity) } }
         else if waiting {
           RoundedRectangle(cornerRadius: 12).fill(Ink.yellow.opacity(0.12))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Ink.yellow.opacity(0.4), lineWidth: 1))
@@ -350,6 +364,26 @@ struct FocusTag: View {
 // A clip's head with a dot on the paragraphs' line beside it, so the clips and their paragraphs read as one timeline
 // joined by that line, as the chat's rows are (Sankalp, 2 Nov 2026). The line runs on through the head into the
 // paragraphs under it; above the first head there is none.
+// Above the clips of a reel with no words yet: why there are none, the button that transcribes every video, and how
+// the last transcription went.
+struct TranscribeBar: View {
+  @ObservedObject var model: EditorModel
+
+  var body: some View {
+    let busy = model.status["state"]?.string == "transcribing"
+    let sound = model.loaded.project.main.hasAudio || model.loaded.project.edits.sources.contains(where: \.hasAudio)
+    InsetCard(title: busy ? "Transcribing" : sound ? "No transcript yet" : "These videos have no sound", icon: "chat-text") {
+      Text("Transcribe the speech to cut by words and show captions. The clips can still be cut and moved on the timeline.")
+        .font(.inter(14)).foregroundStyle(Ink.secondary).fixedSize(horizontal: false, vertical: true)
+      if sound {
+        Button { model.transcribe() } label: { IconLabel(busy ? "Transcribing" : "Transcribe with WhisperX", icon: "microphone", size: 14) }
+          .pill(.primary, .md).disabled(busy)
+      }
+      if let m = model.status["message"]?.string, model.status["kind"]?.string == "transcribe" { Note(m) }
+    }
+  }
+}
+
 struct ClipHeadRow: View {
   @ObservedObject var model: EditorModel
   let p: Paragraph

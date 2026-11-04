@@ -945,7 +945,7 @@ struct MCPDetails: View {
             }
             ForEach(accounts, id: \.account) { a in
               AccountTree(account: a.account.isEmpty ? nil : a.account, profile: a.profile, org: a.org, sessions: a.items, usage: usage,
-                          talking: a.items.contains { app.isTalking($0) }, limits: limits)
+                          talking: a.items.contains { app.isTalking($0) }, limits: limits, disconnects: tab == "editor")
             }
           }
           .padding(.vertical, 4)
@@ -986,6 +986,9 @@ struct AccountTree: View {
   let usage: [Int32: TokenUsage]
   let talking: Bool
   @ObservedObject var limits: AccountLimits
+  // Disconnect is only on This editor: All sessions lists every Claude with the tools, and only a session's link to
+  // this editor is the editor's to cut (Sankalp, 4 Nov 2026).
+  var disconnects = true
 
   var body: some View {
     let u = profile.flatMap { limits.usage[$0] }
@@ -1031,7 +1034,7 @@ struct AccountTree: View {
         UsageMeterRow(title: "Weekly", fraction: week?.utilization, reset: AccountLimits.resetText(week?.resetsAt), app: limits.appShare[profile]?["seven_day"]).treeChild(1, of: n)
       }
       ForEach(Array(sessions.enumerated()), id: \.element.pid) { i, p in
-        SessionLeaf(p: p, usage: usage[p.pid]).treeChild((showLimits ? 2 : 0) + i, of: n)
+        SessionLeaf(p: p, usage: usage[p.pid], disconnects: disconnects).treeChild((showLimits ? 2 : 0) + i, of: n)
       }
     }
   }
@@ -1057,6 +1060,7 @@ struct ConnectHelp: View {
 struct SessionLeaf: View {
   let p: MCPPresence
   let usage: TokenUsage?
+  var disconnects = true
   @State private var confirming = false
   @State private var hover = false
   var body: some View {
@@ -1069,7 +1073,9 @@ struct SessionLeaf: View {
           Text("\(compactCount(u.total))").font(.inter(12, .medium)).foregroundStyle(Ink.secondary).monospacedDigit()
             .help("\(compactCount(u.output)) written, \(compactCount(u.input + u.cacheWrite)) read, \(compactCount(u.cacheRead)) from the cache, \(u.messages) messages")
         }
-        if confirming {
+        if !disconnects {
+          EmptyView()
+        } else if confirming {
           // Asked once, yes or no; on yes the session leaves the panel at once.
           Text("Disconnect?").font(.inter(12, .medium)).foregroundStyle(Ink.strong).fixedSize()
           Button("No") { confirming = false }.pill(.outline, .xs)

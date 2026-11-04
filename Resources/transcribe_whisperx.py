@@ -95,13 +95,27 @@ def clean(words, dur):
     return words
 
 
+def load_audio(path):
+    """16 kHz mono float32. The app's own 16 kHz mono 16 bit wav is read without ffmpeg, which an app opened from the
+    Dock cannot find on its PATH; anything else goes through whisperx and ffmpeg."""
+    import wave
+    import numpy as np
+    try:
+        with wave.open(path, "rb") as f:
+            if f.getframerate() == 16000 and f.getnchannels() == 1 and f.getsampwidth() == 2:
+                return np.frombuffer(f.readframes(f.getnframes()), dtype="<i2").astype(np.float32) / 32768.0
+    except (wave.Error, EOFError):
+        pass
+    return whisperx.load_audio(path)
+
+
 def main():
     if len(sys.argv) < 3:
         sys.exit("usage: python transcribe_whisperx.py <audio.wav> <words.json> [script.txt]")
     src, out = sys.argv[1], sys.argv[2]
     script = sys.argv[3] if len(sys.argv) > 3 else None
     align_device = os.environ.get("WHISPERX_ALIGN_DEVICE", "cpu")
-    audio = whisperx.load_audio(src)  # 16 kHz mono float32 through ffmpeg
+    audio = load_audio(src)
     dur = len(audio) / 16000
     align_model, meta = whisperx.load_align_model("en", align_device)  # wav2vec2-base-960h
 

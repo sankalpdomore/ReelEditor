@@ -16,7 +16,7 @@ import SwiftUI
 
 struct DirectMessage: Identifiable, Codable, Equatable {
   var id = UUID()
-  var role: String // you, claude, activity, rules (the rule books sent when a Claude starts), error
+  var role: String // you, claude, activity, rules (the rule books sent when a Claude starts), note (a fresh Claude taking over), error
   var text: String
   var t = Date()
   var tool: String? = nil // for a tool Claude ran: its name, and what it worked on (a range, a paragraph)
@@ -62,6 +62,7 @@ struct ChatUsage: Codable, Equatable {
   var madeOwnRules = false // Claude gave the project a rules folder of its own in this turn
   var interrupting: DispatchWorkItem?
   var queuedComments: [(shown: String, extra: String)] = []
+  var recovered = false // this request already restarted Claude once because its context was full
 
   var project: String? { key.isEmpty ? nil : key }
   // A project's chat is kept beside its project file, <name>-chat-history.json, the messages and what the chat used in one
@@ -152,8 +153,13 @@ struct ChatUsage: Codable, Equatable {
     frontChanged()
   }
 
-  // Reads the rules folder of the project in front again, for the count and the path shown in the chat.
-  func reloadRules() { let d = Rules.dir(for: project); rules = Rules.books(in: d); rulesDir = d.path }
+  // Reads the rules folder of the project in front again, for the count and the path shown in the chat. Only a change is
+  // published, so reading it every few seconds redraws nothing.
+  func reloadRules() {
+    let d = Rules.dir(for: project), b = Rules.books(in: d)
+    if b != rules { rules = b }
+    if d.path != rulesDir { rulesDir = d.path }
+  }
 
   // Points the rule books of the project in front at another folder (nil is the default _rules) and saves it as the
   // folder new projects start with. A Claude already running keeps the rules it started with, is told of the new folder
@@ -200,6 +206,13 @@ struct ChatUsage: Codable, Equatable {
   }
 
   init() {
+    // Rule books added or changed outside the app (in Finder, by an agent, through iCloud) show without a restart
+    // (Sankalp, 4 Nov 2026): the folder of the project in front is read again every 5 seconds and when the app comes to
+    // the front. The timer lives here, not in a view, where every redraw made it anew and it never fired.
+    Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in Task { @MainActor in DirectChat.shared.reloadRules() } }
+    NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+      Task { @MainActor in DirectChat.shared.reloadRules() }
+    }
     // REEL_EDITOR_DIRECT_SAY=<text> sends one message a few seconds after launch, for checking the direct chat end to end.
     if let say = ProcessInfo.processInfo.environment["REEL_EDITOR_DIRECT_SAY"] {
       DispatchQueue.main.asyncAfter(deadline: .now() + 3) { DirectChat.shared.send(say, context: AppModel.shared.screenContext()) }
@@ -254,7 +267,7 @@ struct ChatUsage: Codable, Equatable {
   The app shows him live what you work on: the paragraphs your tools touch light up in the transcript with what you are \
   doing. So for a trim pass, unless he asks for another way: run audit_audio once for the whole reel, call \
   get_paragraphs, then go paragraph by paragraph in order: read it with get_words paragraph n, decide its cuts by the \
-  rule books and the audit's findings in it, make them with cut_range or delete_words, then move to the next. Use \
+  rule books and the audit's findings in it, make them all in one cut_range call with ranges, or with delete_words, then move to the next. Use \
   set_focus to show anything else you are doing, such as checking the joins. When he sends a new message or stops you, \
   do what the new message says.
 
@@ -388,13 +401,13 @@ struct ChatUsage: Codable, Equatable {
   }
 
   // extra goes to Claude after the message but is not shown in the chat.
-  func send(_ text: String, context: String, extra: String = "", to chat: ChatSession? = nil) {
+  func send(_ text: String, context: String, extra: String = "", to chat: ChatSession? = nil, shown: Bool = true) {
     let s = chat ?? front
     let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !t.isEmpty else { return }
     if s.proc == nil { start(s) }
     guard let input = s.input else { return }
-    append("you", t, to: s)
+    if shown { append("you", t, to: s); s.recovered = false }
     // A project whose rules folder is not the one this conversation started with: Claude is pointed at its rules.
     var screen = context
     if let p = s.project { let d = Rules.dir(for: p).path; if d != s.rulesSent { screen += ", its rule books are in \(d), not the ones you started with: read them with get_rules project \(p) before editing it" } }
@@ -425,7 +438,9 @@ struct ChatUsage: Codable, Equatable {
       guard let m = o["message"] as? [String: Any], let content = m["content"] as? [[String: Any]] else { return }
       let id = m["id"] as? String
       for c in content {
-        if c["type"] as? String == "text", let t = c["text"] as? String, !t.isEmpty {
+        // The bare Prompt is too long that comes as an answer when the context is full is the turn's error, shown (or
+        // recovered from) with the result, not a bubble of Claude's.
+        if c["type"] as? String == "text", let t = c["text"] as? String, !t.isEmpty, !(t.count < 80 && Self.contextFull(t)) {
           // The parts of one answer join into one bubble.
           if id != nil, id == s.lastAssistantId, let i = s.messages.lastIndex(where: { $0.role == "claude" }), i == s.messages.count - 1 {
             s.messages[i].text += t; s.save()
@@ -445,7 +460,9 @@ struct ChatUsage: Codable, Equatable {
     case "result":
       s.state = "ready"
       s.lastAssistantId = nil
-      if o["is_error"] as? Bool == true, s.interrupting == nil { append("error", (o["result"] as? String) ?? "Claude stopped with an error", to: s) }
+      // A context that filled up mid request is not shown as an error: Claude starts fresh and carries on, once.
+      let full = o["is_error"] as? Bool == true && s.interrupting == nil && !s.recovered && Self.contextFull(o["result"] as? String)
+      if o["is_error"] as? Bool == true, s.interrupting == nil, !full { append("error", (o["result"] as? String) ?? "Claude stopped with an error", to: s) }
       var extra: [String: JSON] = ["profile": .string(profile), "model": .string(model)]
       if let c = o["total_cost_usd"] as? NSNumber {
         extra["cost_usd"] = .number(c.doubleValue)
@@ -470,6 +487,7 @@ struct ChatUsage: Codable, Equatable {
       extra["chat_cost_usd"] = .number(s.usage.cost)
       s.save()
       Log.write("app", "direct_chat_turn", args: ["project": s.project.map { .string($0) } ?? .null], extra: extra)
+      if full { carryOn(s); return }
       // Claude is done with what it was asked: a notification with its last words (Sankalp, 2 Nov 2026).
       let said = s.messages.last { $0.role == "claude" }?.text.replacingOccurrences(of: "\n", with: " ")
       let failed = o["is_error"] as? Bool == true
@@ -481,12 +499,48 @@ struct ChatUsage: Codable, Equatable {
     }
   }
 
+  // Claude's context filled up in the middle of a request (Prompt is too long, Sankalp, 2 Nov 2026): the request would
+  // fail the same way again in that conversation, so a new Claude takes it over with the request and what was already
+  // done, read from the chat, and carries on from there. Only once per request, so it can never loop.
+  static func contextFull(_ text: String?) -> Bool {
+    guard let t = text?.lowercased() else { return false }
+    return ["prompt is too long", "context length", "context window", "too many tokens", "maximum context"].contains { t.contains($0) }
+  }
+
+  private func carryOn(_ s: ChatSession) {
+    guard let ask = s.messages.lastIndex(where: { $0.role == "you" }) else { return }
+    s.recovered = true
+    let since = s.messages[(ask + 1)...]
+    let done = since.filter { $0.role == "activity" }.suffix(300).map { "- " + ($0.tool ?? $0.text) + ($0.detail.map { ", " + $0 } ?? "") }
+    let said = since.filter { $0.role == "claude" }.map(\.text).joined(separator: "\n").suffix(2000)
+    append("note", "Claude's memory of this chat filled up, so a fresh Claude is taking over and carrying on from where it stopped", to: s)
+    stop(s)
+    let text = """
+    [The Claude working on this request ran out of room in its context and stopped. You are taking over: carry on from \
+    where it stopped and finish the request. What it did is already saved in the project, so do not redo it; read the \
+    project again as you need (get_timeline, get_words), and make many cuts in one cut_range call with ranges.]
+
+    The request: \(s.messages[ask].text)
+
+    What was done before it stopped:
+    \(done.isEmpty ? "- nothing yet" : done.joined(separator: "\n"))
+    \(said.isEmpty ? "" : "\nWhat it said:\n" + said)
+    """
+    let context = s.key == (project ?? "") ? AppModel.shared.screenContext() : "project \(s.key), not in front"
+    send(text, context: context, to: s, shown: false)
+    Log.write("app", "direct_chat_carry_on", args: ["project": s.project.map { .string($0) } ?? .null], extra: ["done": .number(Double(done.count))])
+  }
+
   // What a tool call worked on, in a few words for the chat: the times of a cut, the words, the paragraph read.
   static func detail(_ tool: String, _ i: [String: Any]) -> String? {
     let num = { (k: String) in (i[k] as? NSNumber)?.doubleValue }
     let tc = { (x: Double) in timecode(x).components(separatedBy: ".")[0] }
     switch tool {
     case "cut_range", "restore_range":
+      if let r = i["ranges"] as? [[String: Any]], !r.isEmpty {
+        let a = r.compactMap { ($0["start"] as? NSNumber)?.doubleValue }.min() ?? 0, b = r.compactMap { ($0["end"] as? NSNumber)?.doubleValue }.max() ?? 0
+        return "\(r.count) \(r.count == 1 ? "cut" : "cuts"), \(tc(a)) to \(tc(b))"
+      }
       if let a = num("start"), let b = num("end") { return "\(tc(a)) to \(tc(b))" }
     case "delete_words", "restore_words":
       if let a = num("from"), let b = num("to") { return "words \(Int(a)) to \(Int(b))" }

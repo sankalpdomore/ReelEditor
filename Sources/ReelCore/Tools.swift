@@ -154,12 +154,18 @@ private let animFields: [String: JSON] = [
 ]
 
 func name(_ i: JSON) throws -> String { try Store.checkName(i["project"]?.string ?? "") }
+// What an edit tool answers: what changed and a short summary of the reel, not its whole state (Sankalp, 2 Nov 2026). The
+// whole state of a long reel is over 50,000 characters, and a trim pass of 73 cuts that got it back after every cut filled
+// the chat Claude's context until it stopped with Prompt is too long. get_project and get_timeline give the whole state.
 func result(_ m: Store.Mutation, _ extra: [String: JSON] = [:]) -> JSON {
-  let state = ReelState.of(m.loaded, words: false)
-  var o: [String: JSON] = ["project": .string(m.loaded.project.name), "changed": .bool(m.changed), "duration": state["duration"] ?? .null, "keep": state["keep"] ?? .null]
+  let l = m.loaded, plan = l.plan, edl = l.project.edits
+  let waiting = edl.cuts.filter { $0.pending == true }.count + (edl.pendingWords?.count ?? 0)
+  var o: [String: JSON] = ["project": .string(l.project.name), "changed": .bool(m.changed),
+                           "duration": .number(round3(plan.duration / Compose.speedOf(edl))), "editDuration": .number(round3(plan.editDuration)),
+                           "clips": .number(Double(plan.clips.count)), "cutRanges": .number(Double(plan.cuts.count)), "waitingCuts": .number(Double(waiting)),
+                           "canUndo": .bool(!l.history.past.isEmpty), "canRedo": .bool(!l.history.future.isEmpty)]
   for (k, v) in m.info { o[k] = v }
   for (k, v) in extra { o[k] = v }
-  o["state"] = state
   return .object(o)
 }
 func edit(_ i: JSON, _ label: String, _ fn: @escaping (inout Edl, inout [ReelAnimation], EdlMain) throws -> [String: JSON]) throws -> JSON {
@@ -265,10 +271,23 @@ let coreTools: [ReelTool] = [
     }
     return state
   },
-  ReelTool(name: "cut_range", description: "Cuts a range out: the picture and sound between start and end (edit time, seconds) are skipped by playback and left out of the export. Nothing is deleted; restore_range or undo brings it back. A range touching an earlier cut joins it. A cut made through MCP waits for Sankalp's approval (pending, see approve_cuts) unless approved is true; it plays and exports as a cut either way.", inputSchema: obj(["project": projectArg, "start": sec("Where the cut starts."), "end": sec("Where the cut ends."), "approved": ["type": "boolean", "description": "True only for a cut Sankalp made himself. Left out from an agent, the cut waits for his approval (approve_cuts)."]], ["project", "start", "end"])) { i in
+  // A trim pass cuts many short pieces: ranges takes them all in one call and one undo step, so Claude makes a pass in a
+  // few calls instead of one per cut (Sankalp, 2 Nov 2026).
+  ReelTool(name: "cut_range", description: "Cuts a range out: the picture and sound between start and end (edit time, seconds) are skipped by playback and left out of the export. For many cuts at once, as in a trim pass, give ranges, a list of start and end, instead of start and end: one call and one undo step for all of them. Edit times do not move when something is cut, so every range is read against the same times. Nothing is deleted; restore_range or undo brings it back. A range touching an earlier cut joins it. A cut made through MCP waits for Sankalp's approval (pending, see approve_cuts) unless approved is true; it plays and exports as a cut either way. The answer is a short summary; read get_timeline for the whole state.", inputSchema: obj(["project": projectArg, "start": sec("Where the cut starts."), "end": sec("Where the cut ends."),
+    "ranges": ["type": "array", "minItems": 1, "maxItems": 500, "description": "Several cuts at once, each a start and end in edit seconds, in place of start and end.", "items": obj(["start": sec("Where the cut starts."), "end": sec("Where the cut ends.")], ["start", "end"])],
+    "approved": ["type": "boolean", "description": "True only for a cut Sankalp made himself. Left out from an agent, the cut waits for his approval (approve_cuts)."]], ["project"])) { i in
     let pending = !(i["approved"]?.bool ?? !ToolContext.cutsWaitForApproval)
-    if let n = try? name(i) { Focus.set(n, "Applying trims", i["start"]!.double!, i["end"]!.double!) }
-    return try edit(i, "cut_range") { e, _, m in let r = try cutRange(e, m, i["start"]!.double!, i["end"]!.double!, pending: pending); e = r.edl; return r.info }
+    var list: [(Double, Double)] = (i["ranges"]?.array ?? []).compactMap { r in r["start"]?.double.flatMap { a in r["end"]?.double.map { (a, $0) } } }
+    if list.isEmpty, let a = i["start"]?.double, let b = i["end"]?.double { list = [(a, b)] }
+    guard !list.isEmpty else { throw ToolError("invalid_input", "Give start and end, or ranges") }
+    if let n = try? name(i) { Focus.set(n, "Applying trims", list.map(\.0).min()!, list.map(\.1).max()!) }
+    return try edit(i, "cut_range") { e, _, m in
+      var made: [JSON] = []
+      for (a, b) in list {
+        let r = try cutRange(e, m, a, b, pending: pending); e = r.edl; made += r.info["cuts"]?.array ?? [] // a bad range throws, and nothing is cut
+      }
+      return ["cuts": .array(made), "ranges": .number(Double(list.count))]
+    }
   },
   ReelTool(name: "restore_range", description: "Brings back a range cut_range took out: cuts inside start to end are removed, a cut that crosses an end is shortened. Cut words come back with restore_words.", inputSchema: obj(["project": projectArg, "start": sec("Start of the range to bring back."), "end": sec("End of the range.")], ["project", "start", "end"])) { i in
     try edit(i, "restore_range") { e, _, m in let r = try restoreRange(e, m, i["start"]!.double!, i["end"]!.double!); e = r.edl; return r.info }

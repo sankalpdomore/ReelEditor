@@ -26,17 +26,33 @@ public enum Jobs {
     return (python, script)
   }
 
-  static func run(_ exe: String, _ args: [String]) async throws -> (Int32, String) {
+  // An app opened from the Dock gets launchd's PATH, /usr/bin:/bin:/usr/sbin:/sbin, so tools Homebrew installed (ffmpeg,
+  // which WhisperX reaches for) were not found and every video failed (Sankalp, 4 Nov 2026). Python helpers run with
+  // the Homebrew folders added.
+  public static func toolEnvironment() -> [String: String] {
+    var env = ProcessInfo.processInfo.environment
+    let have = (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin").split(separator: ":").map(String.init)
+    env["PATH"] = (have + ["/opt/homebrew/bin", "/usr/local/bin"].filter { !have.contains($0) }).joined(separator: ":")
+    return env
+  }
+
+  // The line of a Python traceback that says what went wrong is its last one.
+  static func lastLine(_ stderr: String) -> String {
+    stderr.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty } ?? ""
+  }
+
+  static func run(_ exe: String, _ args: [String]) async throws -> (Int32, String, Bool) {
     try await withCheckedThrowingContinuation { cont in
       let p = Process()
       p.executableURL = URL(fileURLWithPath: exe)
       p.arguments = args
+      p.environment = toolEnvironment()
       let err = Pipe()
       p.standardError = err
       p.standardOutput = FileHandle.nullDevice
       p.terminationHandler = { proc in
         let text = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        cont.resume(returning: (proc.terminationStatus, String(text.suffix(600))))
+        cont.resume(returning: (proc.terminationStatus, String(text.suffix(600)), proc.terminationReason == .uncaughtSignal))
       }
       do { try p.run() } catch { cont.resume(throwing: ToolError("transcribe_failed", "Could not start \(exe): \(error.localizedDescription)")) }
     }
@@ -122,8 +138,15 @@ public enum Jobs {
       try await Media.writeWav(URL(fileURLWithPath: file), to: wav)
       if let script { try script.write(to: scriptFile, atomically: true, encoding: .utf8) }
       Store.setStatus(name, ["state": "transcribing", "kind": "transcribe", "message": .string(script == nil ? "WhisperX is listening to \(what), a minute or two" : "Placing the script on \(what)"), "pid": .number(Double(getpid()))])
-      let (code, stderr) = try await run(wx.python, [wx.script, wav.path, out.path] + (script == nil ? [] : [scriptFile.path]))
-      guard code == 0 else { throw ToolError("transcribe_failed", "WhisperX stopped with code \(code): \(stderr)") }
+      // WhisperX now and then dies on a signal (an abort, code 6, or a segfault, code 11) on a video it transcribes
+      // the next time (Sankalp, 4 Nov 2026), so a run that crashed is tried once more; a real error is not.
+      let args = [wx.script, wav.path, out.path] + (script == nil ? [] : [scriptFile.path])
+      var (code, stderr, crashed) = try await run(wx.python, args)
+      if crashed {
+        Log.write("core", "transcribe_retry", args: ["file": .string(file), "signal": .number(Double(code))])
+        (code, stderr, crashed) = try await run(wx.python, args)
+      }
+      guard code == 0 else { throw ToolError("transcribe_failed", "WhisperX stopped with code \(code): \(lastLine(stderr))") }
       let words = try Store.read([Word].self, out)
       if report { Store.setStatus(name, ["state": "ready", "kind": "transcribe", "message": .string("\(words.count) words from \(what)")]) }
       return words

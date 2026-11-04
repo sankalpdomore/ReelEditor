@@ -35,6 +35,7 @@ enum Audit {
       let p = Process()
       p.executableURL = URL(fileURLWithPath: exe)
       p.arguments = args
+      p.environment = Jobs.toolEnvironment()
       let err = Pipe()
       p.standardError = err
       p.standardOutput = FileHandle.nullDevice
