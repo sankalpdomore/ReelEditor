@@ -79,22 +79,25 @@ struct TranscriptView: View {
             let working = Set(model.agentFocus.map(model.paragraphIds) ?? [])
             let clips = Set(model.paragraphs.map(\.clip)).count
             if model.words.isEmpty { TranscribeBar(model: model).padding(.leading, 72).padding(.bottom, 16) }
-            ForEach(model.paragraphs) { p in
-              let part = titled.firstIndex(of: p.id)
-              // With more than one clip, each clip starts with its video's name, dragged to put the clips in a new order.
-              let head = p.clipStart && (clips > 1 || model.words.isEmpty), lit1 = lit.contains(p.id)
-              // A clip's first paragraph that Claude works on has its blue box round the clip's head too, from the head's
-              // top to the paragraph's last line (Sankalp, 4 Nov 2026).
+            // A run of paragraphs Claude works on is one blue box, from the top of its first paragraph, or of the clip head
+            // above it, to the last line of its last, clip heads inside it included, with no gaps (Sankalp, 4 Nov 2026). A
+            // paragraph Claude is not on stays outside the box.
+            ForEach(Self.runs(model.paragraphs, lit: Set(lit)), id: \.first!.id) { run in
+              let isLit = lit.contains(run[0].id)
+              let headFirst = run[0].clipStart && (clips > 1 || model.words.isEmpty)
               VStack(alignment: .leading, spacing: 0) {
-                if head { ClipHeadRow(model: model, p: p, first: p.id == model.paragraphs.first?.id) }
-                TranscriptParagraph(model: model, p: p, part: part, last: p.id == model.paragraphs.last?.id, frames: frames,
-                                    focus: lit1, glow: !head, focusLabel: p.id == lit.first ? model.agentFocus.map(Self.tag) : nil, shimmer: working.contains(p.id))
-                  .id(p.id)
+                ForEach(run) { p in
+                  // With more than one clip, each clip starts with its video's name, dragged to put the clips in a new order.
+                  if p.clipStart && (clips > 1 || model.words.isEmpty) { ClipHeadRow(model: model, p: p, first: p.id == model.paragraphs.first?.id) }
+                  TranscriptParagraph(model: model, p: p, part: titled.firstIndex(of: p.id), last: p.id == model.paragraphs.last?.id, frames: frames,
+                                      focus: lit.contains(p.id), glow: false, focusLabel: p.id == lit.first ? model.agentFocus.map(Self.tag) : nil, shimmer: working.contains(p.id))
+                    .id(p.id)
+                }
               }
               .background(alignment: .topLeading) {
-                // The head starts 72 points in and the paragraph's words end 24 points above its bottom: the box reaches
-                // 8 points past both, as a paragraph's own box does.
-                if head && lit1 { FocusGlow().padding(EdgeInsets(top: -8, leading: 64, bottom: 16, trailing: -8)).transition(.opacity) }
+                // A clip head starts 72 points in, a paragraph's words 88, and the last words end 24 points above the run's
+                // bottom: the box reaches 8 points past each, as a single paragraph's did.
+                if isLit { FocusGlow().padding(EdgeInsets(top: -8, leading: headFirst ? 64 : 80, bottom: 16, trailing: -8)).transition(.opacity) }
               }
             }
             ExtraTranscript(model: model)
@@ -133,6 +136,16 @@ struct TranscriptView: View {
 }
 
 extension TranscriptView {
+  // The paragraphs in order, cut into runs: each run of paragraphs Claude is working on together, every other paragraph
+  // on its own.
+  static func runs(_ paras: [Paragraph], lit: Set<Int>) -> [[Paragraph]] {
+    var out: [[Paragraph]] = []
+    for p in paras {
+      if lit.contains(p.id), let last = out.last?.last, lit.contains(last.id) { out[out.count - 1].append(p) } else { out.append([p]) }
+    }
+    return out
+  }
+
   // The paragraphs Claude is working on: every one with a word inside the span its tools last touched.
   var focused: [Int] { model.agentFocus.map { model.paragraphIds($0) } ?? [] }
 
@@ -273,10 +286,12 @@ struct WordChip: View {
     let current = model.currentWord == w.id && !selected
     Text(w.text)
       .font(.inter(TRANSCRIPT_SIZE))
-      .strikethrough(w.cut, color: w.pending ? Ink.amber : Ink.red)
-      .foregroundStyle(current ? Ink.onPrimary : w.pending ? Ink.amber : w.cut ? Ink.ghost : Ink.text)
+      // A cut word keeps its red or amber strike but is faded, with no box behind it, so the kept words are what reads
+      // (Sankalp, 4 Nov 2026).
+      .strikethrough(w.cut, color: (w.pending ? Ink.amber : Ink.red).opacity(0.5))
+      .foregroundStyle(current ? Ink.onPrimary : w.pending ? Ink.amber.opacity(0.45) : w.cut ? Ink.ghost.opacity(0.7) : Ink.text)
       .padding(.horizontal, TRANSCRIPT_WORD_PAD)
-      .background(RoundedRectangle(cornerRadius: 4).fill(selected ? Ink.select : current ? Ink.strong : w.pending ? Ink.amber.opacity(0.1) : hover ? Ink.sunken : .clear))
+      .background(RoundedRectangle(cornerRadius: 4).fill(selected ? Ink.select : current ? Ink.strong : hover ? Ink.sunken : .clear))
       .help(w.pending ? "Cut from the chat, waiting for your approval" : "")
       .onHover { hover = $0 }
       .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("words")) }) { [frames, id = w.id] r in frames.rects[id] = r }

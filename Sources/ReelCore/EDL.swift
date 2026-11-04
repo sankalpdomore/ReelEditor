@@ -491,6 +491,33 @@ public func restoreRange(_ edl: Edl, _ main: EdlMain, _ start: Double, _ end: Do
   return OpResult(edl: canonical(b2, main))
 }
 
+// Moves the edges of the cut at edit time at to start and end (Sankalp, 4 Nov 2026): the timeline's handles on a cut, and
+// resize_cut. The cut there, a range cut or a run of cut words or both joined, is restored, its words with it, and the new
+// span is cut as one range, waiting for approval when any part of the old cut was. One undo step.
+public func resizeCut(_ edl: Edl, _ main: EdlMain, at: Double, start: Double, end: Double) throws -> OpResult {
+  let base = materialize(edl, main)
+  let plan = buildPlan(base, main)
+  guard let old = plan.cuts.first(where: { at >= $0.s - EPS && at <= $0.e + EPS }) else {
+    throw EdlError("not_found", "No cut at \(round3(at)) s. The cuts are at \(plan.cuts.prefix(12).map { "\(round3($0.s)) to \(round3($0.e))" }.joined(separator: ", "))")
+  }
+  let mid = { (i: Int) -> Double? in
+    guard i < main.words.count else { return nil }
+    let w = main.words[i]
+    return plan.clips.first { $0.source == MAIN && (w.s + w.e) / 2 >= $0.inn && (w.s + w.e) / 2 < $0.out }.map { $0.editStart + (w.s + w.e) / 2 - $0.inn }
+  }
+  let words = base.deleted.filter { i in mid(i).map { $0 >= old.s - EPS && $0 <= old.e + EPS } ?? false }
+  let pendingWords = Set(base.pendingWords ?? [])
+  let pending = plan.rangeCuts.contains { $0.pending == true && $0.e > old.s + EPS && $0.s < old.e - EPS } || words.contains { pendingWords.contains($0) }
+  var e = try restoreRange(base, main, old.s, old.e).edl
+  if !words.isEmpty { e = try restoreWords(e, main, words).edl }
+  let r = try cutRange(e, main, start, end, pending: pending)
+  var info = r.info
+  info["from"] = ["start": .number(round3(old.s)), "end": .number(round3(old.e))]
+  info["start"] = .number(round3(max(0, start))); info["end"] = .number(round3(min(plan.editDuration, end)))
+  info["pending"] = .bool(pending)
+  return OpResult(edl: r.edl, info: info)
+}
+
 private func checkWords(_ main: EdlMain, _ indexes: [Int]) throws {
   for i in indexes where i < 0 || i >= main.words.count { throw EdlError("invalid_word", "No word with index \(i). The reel has \(main.words.count) words") }
 }

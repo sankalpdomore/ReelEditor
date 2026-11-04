@@ -15,7 +15,7 @@ os.makedirs(os.path.join(HOME, "_music"))
 shutil.copy(os.path.join(MEDIA, "music.m4a"), os.path.join(HOME, "_music", "bed.m4a"))
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env = dict(os.environ, REEL_EDITOR_HOME=HOME, REEL_EDITOR_NO_OPEN="1",
-           REEL_WHISPERX_SCRIPT=os.path.join(REPO, "Resources", "transcribe_whisperx.py"), REEL_AUDIT_SCRIPT=os.path.join(REPO, "Resources", "audit_audio.py"), REEL_NO_TRASH="1")
+           REEL_WHISPERX_SCRIPT=os.path.join(REPO, "Resources", "transcribe_whisperx.py"), REEL_AUDIT_SCRIPT=os.path.join(REPO, "Resources", "audit_audio.py"), REEL_NO_TRASH="1", REEL_NO_DECIPHER="1")
 proc = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
 nid = 0
 results = []
@@ -176,6 +176,10 @@ bad("get_words", {"project": B, "limit": 0}, "invalid_input", "get_words rejects
 good, r = call("audit_audio", {"project": B, "to": 4})
 if good:
     check("audit_audio returns findings with edit times and what was heard", isinstance(r.get("findings"), list) and r.get("found") == len(r["findings"]) and all({"start", "end", "why", "heard"} <= set(f) for f in r["findings"]), r)
+    # Every finding says what kind it is; a spot where more was heard than written and no Claude was asked (REEL_NO_DECIPHER)
+    # comes with the words around it to judge (4 Nov 2026).
+    check("audit_audio findings each have a kind", all(f.get("kind") in ("stretched", "uncovered", "unchecked", "repeat", "restart", "missed") for f in r["findings"]), r)
+    check("an unread repeat spot gives the transcript and heard words", all("heardWords" in f and "transcriptWords" in f for f in r["findings"] if f.get("kind") == "unchecked"), r)
 else:
     check("audit_audio without WhisperX says so", str(r).startswith("no_transcriber"), r)
 
@@ -673,6 +677,41 @@ bad("list_comments", {"project": B, "status": "open"}, "invalid_input", "comment
 bad("set_clip_look", {"project": B, "clip": "c1", "values": {"saturation": 1, "hue": 3}}, "invalid_input", "look values unknown key")
 bad("get_project", {"project": "Bad Name"}, "invalid_input", "project name pattern")
 bad("cut_range", {"project": B, "start": 1}, "invalid_input", "cut_range needs end")
+
+# check_rules: the measurable rules of the rule books on the kept words (4 Nov 2026).
+ok("create_project", {"path": os.path.join(MEDIA, "blue.mp4"), "name": "rules", "transcribe": False}, "rules: project")
+rw = [("so", 0.2, 0.4), ("Today", 0.45, 0.7), ("i", 0.75, 0.85), ("want", 0.9, 1.1), ("um", 1.2, 1.4), ("three", 1.5, 1.8), ("the", 1.9, 2.0), ("the", 2.05, 2.15),
+      ("back.", 2.2, 2.5), ("See", 3.5, 3.7), ("you", 3.75, 3.9), ("in", 3.95, 4.0), ("the", 4.05, 4.1), ("next", 4.15, 4.3), ("one.", 4.35, 4.6)]
+json.dump([{"w": w, "s": a, "e": b} for w, a, b in rw], open(os.path.join(SCRATCH, "rules-words.json"), "w"))
+ok("import_transcript", {"project": "rules", "path": os.path.join(SCRATCH, "rules-words.json")}, "rules: words")
+r = ok("check_rules", {"project": "rules"})
+kinds = r.get("byKind", {})
+check("check_rules finds a lower case sentence start and a lower case I", kinds.get("capital") == 2 and sum(1 for f in r["findings"] if f["kind"] == "capital" and f.get("word") in (0, 2)) == 2, r)
+check("check_rules finds the filler, the number and the word kept twice", kinds.get("filler") == 1 and kinds.get("number") == 1 and kinds.get("repeat") == 1, r)
+check("check_rules finds the 1 s gap and the long tail", sum(1 for f in r["findings"] if f["kind"] == "gap" and f["start"] == 2.5) == 1 and any(f["kind"] == "gap" and "after the last word" in f["text"] for f in r["findings"]), r)
+check("check_rules wants next one with an exclamation mark", any(f["kind"] == "punctuation" and "exclamation" in f["text"] for f in r["findings"]), r)
+check("check_rules is not clean and names a fix for each", r.get("clean") is False and r.get("count") == len(r["findings"]) and all(f.get("fix") for f in r["findings"]), r)
+ok("correct_word", {"project": "rules", "index": 0, "text": "So"}, "rules: capital So")
+ok("cut_range", {"project": "rules", "start": 2.65, "end": 3.35, "approved": True}, "rules: cut the gap")
+r = ok("check_rules", {"project": "rules"}, "check_rules after fixes")
+check("a corrected capital and a cut gap leave check_rules", sum(1 for f in r["findings"] if f["kind"] == "capital") == 1 and not any(f["kind"] == "gap" and f["start"] == 2.5 for f in r["findings"]), r)
+r = ok("check_rules", {"project": "rules", "maxGap": 2}, "check_rules with a longer gap")
+check("check_rules takes maxGap", r.get("maxGap") == 2 and not any(f["kind"] == "gap" and "silence" in f["text"] for f in r["findings"]), r)
+
+# resize_cut: the timeline's handles on a cut (4 Nov 2026).
+def rcuts(): return [(c["start"], c["end"], c.get("pending")) for c in pj("rules")["edits"]["cuts"]]
+h0 = past("rules")
+r = ok("resize_cut", {"project": "rules", "at": 3.0, "start": 2.55, "end": 3.45}, "resize_cut longer")
+check("resize_cut makes an approved cut longer in one undo step", (2.55, 3.45, None) in rcuts() and not any(c[0] == 2.65 for c in rcuts()) and past("rules") == h0 + 1 and r.get("pending") is False, (rcuts(), r))
+ok("cut_range", {"project": "rules", "start": 5.0, "end": 5.6}, "rules: a cut waiting for approval")
+ok("resize_cut", {"project": "rules", "at": 5.2, "start": 5.1, "end": 5.3}, "resize_cut shorter")
+check("resize_cut makes a waiting cut shorter and it keeps waiting", (5.1, 5.3, True) in rcuts() and not any(c[0] == 5.0 for c in rcuts()), rcuts())
+ok("delete_words", {"project": "rules", "indexes": [4]}, "rules: cut the filler as a word")
+r = ok("resize_cut", {"project": "rules", "at": 1.3, "start": 1.15, "end": 1.45}, "resize_cut on a cut word")
+check("resize_cut on a cut word gives its word back and cuts the new span, still waiting", 4 not in pj("rules")["edits"]["deleted"] and (1.15, 1.45, True) in rcuts(), (rcuts(), pj("rules")["edits"].get("deleted")))
+bad("resize_cut", {"project": "rules", "at": 7.0, "start": 6.9, "end": 7.1}, "not_found", "resize_cut where there is no cut")
+ok("undo", {"project": "rules"}, "undo resize_cut")
+check("undo puts the cut word back as it was", 4 in pj("rules")["edits"]["deleted"], pj("rules")["edits"].get("deleted"))
 
 untested = sorted(names - called)
 # One file per project: a project saved in a chosen folder, taken off the list and added back by its path.

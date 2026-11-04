@@ -318,6 +318,22 @@ struct Hairline: View {
 // Cards
 
 // The inset card: the header text on a grey shell, the body a white card inset 4 from the shell's sides and bottom.
+// A progress bar: a rounded grey track filled in the ink colour to the fraction done, 0 to 1.
+struct ProgressTrack: View {
+  let fraction: Double
+  var height: CGFloat = 8
+  var body: some View {
+    GeometryReader { g in
+      ZStack(alignment: .leading) {
+        Capsule().fill(Ink.sunken)
+        Capsule().fill(Ink.strong).frame(width: max(height, g.size.width * min(1, max(0, fraction))))
+      }
+    }
+    .frame(height: height)
+    .animation(.easeOut(duration: 0.4), value: fraction)
+  }
+}
+
 struct InsetCard<Content: View>: View {
   let title: String
   var icon: String? = nil

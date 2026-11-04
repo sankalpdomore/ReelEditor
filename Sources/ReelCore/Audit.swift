@@ -30,7 +30,7 @@ enum Audit {
   }
 
   // Runs a command and hands each line it writes to stderr to onLine as it comes; returns the exit code and the last of it.
-  static func runReporting(_ exe: String, _ args: [String], onLine: @escaping @Sendable (String) -> Void) async throws -> (Int32, String) {
+  static func runReporting(_ exe: String, _ args: [String], onLine: @escaping @Sendable (String) -> Void) async throws -> (Int32, String, Bool) {
     try await withCheckedThrowingContinuation { cont in
       let p = Process()
       p.executableURL = URL(fileURLWithPath: exe)
@@ -56,7 +56,7 @@ enum Audit {
         err.fileHandleForReading.readabilityHandler = nil
         let rest = err.fileHandleForReading.readDataToEndOfFile()
         buf.lock.lock(); let tail = String((buf.tail + String(decoding: buf.pending + rest, as: UTF8.self)).suffix(600)); buf.lock.unlock()
-        cont.resume(returning: (proc.terminationStatus, tail))
+        cont.resume(returning: (proc.terminationStatus, tail, proc.terminationReason == .uncaughtSignal))
       }
       do { try p.run() } catch { cont.resume(throwing: ToolError("audit_failed", "Could not start \(exe): \(error.localizedDescription)")) }
     }
@@ -93,18 +93,60 @@ enum Audit {
       try JSON.object(s).text().write(to: spec, atomically: true, encoding: .utf8)
       Store.setStatus(name, ["state": "auditing", "kind": "audit", "message": "Listening again where the words and the sound disagree"])
       // The audit says where it listens again as it goes; each spot lights up its paragraph in the app.
-      let (code, stderr) = try await runReporting(wx.python, [script, spec.path, out.path]) { line in
+      let onLine: @Sendable (String) -> Void = { line in
         let p = line.split(separator: " ")
         if p.count == 3, p[0] == "checking", let a = Double(p[1]), let b = Double(p[2]) { Focus.set(name, "Listening again to a spot the transcript may have missed", a, b) }
       }
-      guard code == 0 else { throw ToolError("audit_failed", "The audit stopped with code \(code): \(stderr)") }
-      let found = try JSONSerialization.jsonObject(with: Data(contentsOf: out)) as? [[String: Any]] ?? []
-      let report: [JSON] = found.map { f in
-        .object(["clip": .string(f["clip"] as? String ?? ""), "start": .number((f["edit_start"] as? NSNumber)?.doubleValue ?? 0), "end": .number((f["edit_end"] as? NSNumber)?.doubleValue ?? 0),
-                 "sourceStart": .number((f["source_start"] as? NSNumber)?.doubleValue ?? 0), "sourceEnd": .number((f["source_end"] as? NSNumber)?.doubleValue ?? 0),
-                 "why": .string(f["why"] as? String ?? ""), "heard": .string(f["heard"] as? String ?? "")])
+      var (code, stderr, crashed) = try await runReporting(wx.python, [script, spec.path, out.path], onLine: onLine)
+      // The models now and then abort on a signal on a run that passes the next time, as WhisperX does (Jobs.words).
+      if crashed {
+        Log.write("core", "audit_retry", args: ["project": .string(name), "signal": .number(Double(code))])
+        (code, stderr, crashed) = try await runReporting(wx.python, [script, spec.path, out.path], onLine: onLine)
       }
-      Store.setStatus(name, ["state": "ready", "kind": "audit", "message": .string("Audit found \(report.count)")])
+      guard code == 0 else { throw ToolError("audit_failed", "The audit stopped with code \(code): \(Jobs.lastLine(stderr))") }
+      let found = try JSONSerialization.jsonObject(with: Data(contentsOf: out)) as? [[String: Any]] ?? []
+      // The spots where more speech was heard than the transcript has go to Sonnet in one call (Decipher).
+      let spotIdx = found.indices.filter { found[$0]["kind"] as? String == "unwritten" }
+      var verdicts: [Int: Decipher.Verdict] = [:]
+      var read = false
+      if !spotIdx.isEmpty {
+        Store.setStatus(name, ["state": "auditing", "kind": "audit", "message": .string("Claude is reading \(spotIdx.count) \(spotIdx.count == 1 ? "spot" : "spots") where more speech was heard than the transcript has")])
+        if let v = await Decipher.spots(spotIdx.map { (found[$0]["transcript_words"] as? [[Any]] ?? [], found[$0]["heard_words"] as? [[Any]] ?? []) }, log: name) {
+          read = true
+          for (k, i) in spotIdx.enumerated() { if let x = v[k] { verdicts[i] = x } }
+        }
+      }
+      var report: [JSON] = []
+      for (i, f) in found.enumerated() {
+        let num = { (k: String) in (f[k] as? NSNumber)?.doubleValue ?? 0 }
+        var o: [String: JSON] = ["clip": .string(f["clip"] as? String ?? ""), "start": .number(num("edit_start")), "end": .number(num("edit_end")),
+                                 "sourceStart": .number(num("source_start")), "sourceEnd": .number(num("source_end")),
+                                 "why": .string(f["why"] as? String ?? ""), "heard": .string(f["heard"] as? String ?? ""), "kind": .string(f["kind"] as? String ?? "")]
+        if f["kind"] as? String == "unwritten" {
+          guard let c = plan.clips.first(where: { $0.id == f["clip"] as? String }) else { continue }
+          if let v = verdicts[i] {
+            if v.kind == "none" { continue } // the same words, only misspelled by the listener
+            o["kind"] = .string(v.kind); o["said"] = .string(v.said); o["earlier"] = .string(v.earlier)
+            // The earlier take goes, up to where the kept take starts (the rule books keep the latest take), in edit seconds.
+            if let a = v.earlierStart {
+              let s = max(c.inn, a - 0.05), e = min(c.out, (v.keptStart ?? (v.earlierEnd ?? a) + 0.15) - 0.08)
+              if e > s + 0.05 {
+                let es = round3(c.editStart + s - c.inn), ee = round3(c.editStart + e - c.inn)
+                let cutAlready = plan.cuts.reduce(0.0) { $0 + max(0, min($1.e, ee) - max($1.s, es)) }
+                o["cut"] = ["start": .number(es), "end": .number(ee)]
+                o["alreadyCut"] = .bool(cutAlready >= (ee - es) * 0.8)
+              }
+            }
+          } else {
+            // Not read: the words around the spot, for the chat's Claude to judge.
+            o["kind"] = "unchecked"
+            o["transcriptWords"] = .string(Decipher.line(f["transcript_words"] as? [[Any]] ?? []))
+            o["heardWords"] = .string(Decipher.line(f["heard_words"] as? [[Any]] ?? []))
+          }
+        }
+        report.append(.object(o))
+      }
+      Store.setStatus(name, ["state": "ready", "kind": "audit", "message": .string("Audit found \(report.count)\(spotIdx.isEmpty ? "" : read ? ", Claude read the repeats" : ", the repeats not read by Claude")")])
       return report
     } catch {
       Store.setStatus(name, ["state": "error", "kind": "audit", "message": .string(String(describing: error).prefix(400).description)])
@@ -258,7 +300,7 @@ let auditTools: [ReelTool] = [
     if let a = page["from"]?.double, let b = page["to"]?.double { Focus.set(l.project.name, label, a, b) }
     return page
   },
-  ReelTool(name: "audit_audio", description: "The audio audit of the rule books (audit-audio.py in the web editor), run on this project's own files: finds where the transcript does not match the sound, a word the aligner stretched over a hidden retake or false start (longer than 0.8 s with more than 0.5 s of speech inside) and speech no word covers, and transcribes each spot again so the report says what is really said there. Each finding has the clip, start and end in edit seconds, sourceStart and sourceEnd, why and heard. Give from and to to audit a part. Takes from a few seconds to a few minutes; nothing in the reel changes. Run it before planning the cuts and again after making them.", inputSchema: obj([
+  ReelTool(name: "audit_audio", description: "The audio audit of the rule books (audit-audio.py in the web editor), run on this project's own files: finds where the transcript does not match the sound, a word the aligner stretched over a hidden retake or false start (longer than 0.8 s with more than 0.5 s of speech inside) and speech no word covers, and transcribes each spot again so the report says what is really said there. It also finds a phrase said twice that the transcript writes once (Whisper writes a repeat or a restarted sentence once and spreads its times over both takes): the sound is read letter by letter, which keeps every repeat, and Claude Sonnet reads each spot where more was heard than written. Each finding has the clip, start and end in edit seconds, sourceStart and sourceEnd, why, heard and kind: stretched, uncovered, repeat, restart, missed, or unchecked when Claude could not be asked (then transcriptWords and heardWords, source seconds, are given to judge it yourself). A repeat, restart or missed finding has said, every take written out, earlier, the take the transcript does not show twice, and cut, the edit seconds that take the earlier take out up to the kept one, with alreadyCut true when it is cut already. Give from and to to audit a part. Takes from a few seconds to a few minutes; nothing in the reel changes. Run it before planning the cuts and again after making them.", inputSchema: obj([
     "project": projectArg,
     "from": sec("Edit time to start the audit at. Default 0."),
     "to": sec("Edit time to end it at. Default the end."),
@@ -268,6 +310,6 @@ let auditTools: [ReelTool] = [
     Focus.set(n, "Auditing the sound", i["from"]?.double ?? 0, i["to"]?.double ?? whole)
     let found = try await Audit.run(n, from: i["from"]?.double, to: i["to"]?.double)
     return ["project": .string(n), "found": .number(Double(found.count)), "findings": .array(found),
-            "note": .string(found.isEmpty ? "Nothing found: every stretch of speech is covered by a word of normal length." : "Act on every finding: cut a hidden retake or false start, move a cut edge off a leftover word, correct a misheard word.")]
+            "note": .string(found.isEmpty ? "Nothing found: every stretch of speech is covered by a word of normal length." : "Act on every finding: cut a hidden retake or false start, move a cut edge off a leftover word, correct a misheard word. For a repeat or restart not alreadyCut, cut its cut range (the latest take stays), then place the clip's words again with transcribe_source and a script that writes out what was said, so the captions follow the kept take and none of its words is left in the cut.")]
   },
 ]

@@ -71,6 +71,7 @@ struct TimelineView: View {
             }
           }
           ClipHitLane(model: model).allowsHitTesting(!model.claudeEditing) // no trims or moves while Claude edits
+          CutLane(model: model).allowsHitTesting(!model.claudeEditing)
           FocusBand(model: model)
           SelectionBand(model: model)
           RangeMenu(model: model)
@@ -79,6 +80,7 @@ struct TimelineView: View {
           Playhead(model: model, clock: model.clock) { x in position.scrollTo(point: CGPoint(x: x, y: scrollY)) }
         }
         .frame(width: width, height: lanes.height, alignment: .topLeading)
+        .coordinateSpace(.named("cutlane"))
         .contentShape(Rectangle())
         .gesture(DragGesture(minimumDistance: 0).onChanged { g in
           let a = g.startLocation.x / model.zoom, b = g.location.x / model.zoom
@@ -88,7 +90,7 @@ struct TimelineView: View {
           model.selection = ReelCore.Range(s: max(0, min(a, b)), e: min(model.plan.editDuration, max(a, b)))
         }.onEnded { g in
           if abs(g.translation.width) < 3 {
-            model.selection = nil; model.selectedWords = nil; model.selectedAnimation = nil
+            model.selection = nil; model.selectedWords = nil; model.selectedAnimation = nil; model.selectedCut = nil
             model.seek(g.location.x / model.zoom)
           }
           dragFrom = nil
@@ -532,6 +534,67 @@ struct AnimationBlock: View {
 
 // Each clip of the video lane as a hit area: its name as a hover tip, and a right click menu of what can be done to it
 // (as the web editor's clip menu): rename, mute or unmute its sound, lay a voice over on it, split at the playhead, delete.
+// The cuts on the timeline can be clicked (Sankalp, 4 Nov 2026): a click selects one and puts a handle on each of its
+// edges, and dragging a handle makes the cut longer or shorter, applied on release as one undo step (resize_cut). A cut
+// waiting for approval keeps waiting. Escape, or a click anywhere else, lets it go.
+struct CutLane: View {
+  @ObservedObject var model: EditorModel
+  @Environment(\.lanes) private var lanes
+  @State private var drag: (edge: Int, to: Double)? = nil // 0 the start, 1 the end, and where it is being dragged to
+
+  var body: some View {
+    let top = lanes.video.lowerBound, h = lanes.words.upperBound - lanes.video.lowerBound, z = model.zoom
+    ZStack(alignment: .topLeading) {
+      ForEach(Array(model.plan.cuts.enumerated()), id: \.offset) { _, cut in
+        let w = max(6, (cut.e - cut.s) * z)
+        Color.clear
+          .frame(width: w, height: h)
+          .contentShape(Rectangle())
+          .help("A cut, \(timecode(cut.s)) to \(timecode(cut.e)). Click it for handles that make it longer or shorter")
+          .onTapGesture {
+            model.selection = nil; model.selectedWords = nil; model.selectedAnimation = nil
+            model.selectedCut = model.selectedCut == cut ? nil : cut
+          }
+          .offset(x: cut.s * z - (w - (cut.e - cut.s) * z) / 2, y: top)
+      }
+      if let cut = model.selectedCut, model.plan.cuts.contains(cut) {
+        let s = drag?.edge == 0 ? drag!.to : cut.s, e = drag?.edge == 1 ? drag!.to : cut.e
+        RoundedRectangle(cornerRadius: 4).stroke(Ink.red, lineWidth: 2)
+          .frame(width: max(2, (e - s) * z), height: h)
+          .offset(x: s * z, y: top)
+          .allowsHitTesting(false)
+        handle(0, at: s, other: e, top: top, h: h)
+        handle(1, at: e, other: s, top: top, h: h)
+      }
+    }
+    .onExitCommand { model.selectedCut = nil }
+    // A cut that changed under the selection (an undo, or Claude) lets the selection go.
+    .onChange(of: model.plan.cuts) { _, cuts in if let c = model.selectedCut, !cuts.contains(c) { model.selectedCut = nil } }
+  }
+
+  func handle(_ edge: Int, at t: Double, other: Double, top: Double, h: Double) -> some View {
+    let z = model.zoom
+    return RoundedRectangle(cornerRadius: 4).fill(Ink.red)
+      .overlay(VStack(spacing: 4) { ForEach(0..<3, id: \.self) { _ in Capsule().fill(Ink.onPrimary).frame(width: 4, height: 2) } })
+      .frame(width: 12, height: 40)
+      .contentShape(Rectangle().inset(by: -4))
+      .onHover { inside in if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
+      .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .named("cutlane")).onChanged { g in
+        // Kept inside the reel, and a cut stays at least 0.05 s long.
+        let x = max(0, min(model.plan.editDuration, g.location.x / z))
+        drag = (edge, edge == 0 ? min(x, other - 0.05) : max(x, other + 0.05))
+      }.onEnded { _ in
+        guard let cut = model.selectedCut, let d = drag else { return }
+        let s = d.edge == 0 ? d.to : cut.s, e = d.edge == 1 ? d.to : cut.e
+        drag = nil
+        model.selectedCut = ReelCore.Range(s: round3(s), e: round3(e))
+        model.run("resize_cut", ["at": .number((cut.s + cut.e) / 2), "start": .number(s), "end": .number(e)])
+      })
+      .help(edge == 0 ? "Drag to move where the cut starts" : "Drag to move where the cut ends")
+      .offset(x: t * z - 6, y: top + (h - 40) / 2)
+  }
+}
+
 struct ClipHitLane: View {
   @ObservedObject var model: EditorModel
   @Environment(\.lanes) private var lanes
@@ -546,7 +609,7 @@ struct ClipHitLane: View {
           .help("\(c.id) · \(label)\(c.clip.muteAudio == true ? " · sound muted" : "") · \(timecode(c.length)). Click for its settings")
           // A click moves the playhead there and opens the clip's settings in a card floating above it.
           .simultaneousGesture(SpatialTapGesture(coordinateSpace: .local).onEnded { v in
-            model.selection = nil; model.selectedWords = nil
+            model.selection = nil; model.selectedWords = nil; model.selectedCut = nil
             model.seek(c.editStart + v.location.x / model.zoom)
           })
           .simultaneousGesture(SpatialTapGesture(coordinateSpace: .named("editor")).onEnded { v in model.show(.clip(c.id), at: v.location) })

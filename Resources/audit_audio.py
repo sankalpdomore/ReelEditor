@@ -12,8 +12,16 @@ floor) and flags two things:
   2. speech outside every word: a loud stretch of 0.3 s or more that no word covers, a sentence the transcript dropped.
 Each flagged window, padded by 0.3 s, is transcribed again on its own, so the report says what is said there. The
 Whisper model is loaded once for the whole audit (WHISPERX_MODEL, small by default). Nothing in the reel changes.
+
+A third check finds a phrase said twice that the transcript writes once (Sankalp, 4 Nov 2026). Whisper tidies speech: it
+writes a repeated phrase or a restarted sentence once and spreads its word times over both takes, so no word is stretched
+and no speech is left uncovered, and the two checks above miss it ("That's all for. That's all for today."). The
+wav2vec2 model WhisperX aligns with also reads letters straight off the sound, greedily, with no language model, so it
+keeps every repeat; it spells badly but takes under a second for half a minute of sound. Its letters are lined up with the
+transcript's, and a stretch where it heard 8 or more letters the transcript does not have is a spot, reported with the
+transcript's words and the heard words around it (kind unwritten) for the reel-editor to have Claude Sonnet say what was said.
 """
-import importlib.util, json, os, sys, wave
+import difflib, importlib.util, json, os, sys, wave
 
 import numpy as np
 
@@ -51,6 +59,86 @@ def runs(mask, min_len):
     return out
 
 
+def heard_letters(model, meta, audio, a0, a1, chunk=25.0):
+    """Every letter wav2vec2 hears from a0 to a1 seconds, greedily, with its time: [(letter or space, seconds)]. The sound
+    is read in pieces of up to 25 s, each ending at the quietest 10 ms of its last 4 s so no word is split."""
+    import torch
+    labels = {v: k for k, v in meta["dictionary"].items()}
+    a1 = min(a1, len(audio) / 16000)
+    out, t = [], a0
+    while t < a1 - 0.05:
+        e = min(a1, t + chunk)
+        if e < a1:
+            seg = audio[int((e - 4) * 16000): int(e * 16000)]
+            n = len(seg) // 160
+            if n:
+                e = e - 4 + int(np.argmin((seg[: n * 160].reshape(n, 160) ** 2).mean(1))) * 0.01 + 0.005
+        piece = torch.from_numpy(audio[int(t * 16000): int(e * 16000)].copy())[None]
+        if piece.shape[1] >= 400:
+            with torch.inference_mode():
+                ids = model(piece)[0][0].argmax(-1).tolist()
+            step = piece.shape[1] / 16000 / max(1, len(ids))
+            prev = None
+            for i, c in enumerate(ids):
+                if c != prev:
+                    ch = labels.get(c, "")
+                    if ch == "|":
+                        out.append((" ", t + i * step))
+                    elif len(ch) == 1 and (ch.isalpha() or ch == "'"):
+                        out.append((ch.lower(), t + i * step))
+                prev = c
+        out.append((" ", e))
+        t = e
+    return out
+
+
+def heard_words(letters):
+    """The heard letters as words with their start and end: [(start, end, word)]."""
+    out, w, st, last = [], "", None, None
+    for c, t in letters + [(" ", None)]:
+        if c == " ":
+            if w:
+                out.append((st, (t if t is not None and t - last < 0.3 else last + 0.06), w))
+            w = ""
+        else:
+            if not w:
+                st = t
+            w += c
+            last = t
+    return out
+
+
+def written_letters(asr, words):
+    """The transcript's words as the letters they sound like, each with a time inside its word."""
+    out = []
+    for w in words:
+        sp = " ".join(asr.spoken_form(w["w"]))
+        for k, ch in enumerate(sp):
+            out.append((ch, w["s"] + (w["e"] - w["s"]) * k / max(1, len(sp))))
+        out.append((" ", w["e"]))
+    return out
+
+
+def unwritten(heard, written, min_extra=8, join=0.6):
+    """Stretches where more letters were heard than the transcript has: [(start, end, extra letters)]. Only letters heard
+    beyond the transcript count; letters the listener missed, which it often does in fast speech, never cancel them."""
+    H = [(c, t) for c, t in heard if c != " "]
+    T = [(c, t) for c, t in written if c != " "]
+    sm = difflib.SequenceMatcher(None, "".join(c for c, _ in T), "".join(c for c, _ in H), autojunk=False)
+    merged = []
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == "equal":
+            continue
+        extra = max(0, (j2 - j1) - (i2 - i1))
+        s, e = (H[j1][1], H[j2 - 1][1] + 0.06) if j2 > j1 else (T[i1][1], T[i1][1])
+        if merged and s - merged[-1][1] < join:
+            merged[-1][1] = max(merged[-1][1], e)
+            merged[-1][2] += extra
+        else:
+            merged.append([s, e, extra])
+    return [(s, e, x) for s, e, x in merged if x >= min_extra]
+
+
 def main():
     spec = json.load(open(sys.argv[1]))
     out = sys.argv[2]
@@ -58,6 +146,7 @@ def main():
     whisperx = asr.whisperx
     lo, hi = spec.get("from"), spec.get("to")
     model = None
+    align = None
     audios = {}
     report = []
     for clip in spec["clips"]:
@@ -84,6 +173,25 @@ def main():
         for a, b in runs(loud & ~covered, 30):
             if a0 <= a < a1:
                 flags.append((a, b, f"speech no word covers, {b - a:.1f} s"))
+        # A phrase heard more often than the transcript writes it; a stretched word or uncovered speech inside such a spot
+        # is the same finding, so it is reported once, as the spot.
+        if align is None:
+            align = whisperx.load_align_model("en", "cpu")
+        print(f"checking {at:.2f} {at + a1 - a0:.2f}", file=sys.stderr, flush=True)
+        heard = heard_letters(align[0], align[1], audio, a0, a1)
+        inside = [w for w in ws if a0 <= w["s"] < a1]
+        spots = unwritten(heard, written_letters(asr, inside))
+        hw = heard_words(heard)
+        for a, b, extra in spots:
+            flags = [f for f in flags if f[1] < a - 0.3 or f[0] > b + 0.3]
+            near = lambda s, e: s < b + 1.5 and e > a - 3.0  # 3 s before: the earlier take sits before the spot
+            report.append({"clip": clip["clip"], "label": clip.get("label", ""), "kind": "unwritten",
+                           "source_start": round(a, 2), "source_end": round(b, 2), "edit_start": round(at + a - cin, 2), "edit_end": round(at + b - cin, 2),
+                           "why": f"{extra} more letters heard than the transcript has, where a phrase said twice or a restart hides",
+                           "heard": " ".join(w for s, e, w in hw if near(s, e)),
+                           "transcript_words": [[round(w["s"], 2), round(w["e"], 2), w["w"]] for w in inside if near(w["s"], w["e"])],
+                           "heard_words": [[round(s, 2), round(e, 2), w] for s, e, w in hw if near(s, e)]})
+            print(f"{len(report)} found", file=sys.stderr, flush=True)
         for a, b, why in sorted(flags):
             # Where the audit is listening now, in edit seconds, read by the app to light up that paragraph.
             print(f"checking {at + a - cin:.2f} {at + b - cin:.2f}", file=sys.stderr, flush=True)
@@ -96,7 +204,7 @@ def main():
             if len(piece) > 1600:
                 res = model.transcribe(piece, batch_size=8, language="en")
                 heard = " ".join(seg["text"].strip() for seg in res.get("segments", [])).strip()
-            report.append({"clip": clip["clip"], "label": clip.get("label", ""), "source_start": round(a, 2), "source_end": round(b, 2),
+            report.append({"clip": clip["clip"], "label": clip.get("label", ""), "kind": "stretched" if why.startswith("stretched") else "uncovered", "source_start": round(a, 2), "source_end": round(b, 2),
                            "edit_start": round(at + a - cin, 2), "edit_end": round(at + b - cin, 2), "why": why, "heard": heard})
             print(f"{len(report)} found", file=sys.stderr, flush=True)
     json.dump(report, open(out, "w"), indent=1)

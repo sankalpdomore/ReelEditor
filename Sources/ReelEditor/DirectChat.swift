@@ -271,6 +271,13 @@ struct ChatUsage: Codable, Equatable {
   set_focus to show anything else you are doing, such as checking the joins. When he sends a new message or stops you, \
   do what the new message says.
 
+  Every audit finding of kind repeat or restart is a phrase he said twice that the transcript writes once: cut its cut \
+  range unless alreadyCut, so the latest take stays, then place that clip's words again from a script that writes out \
+  what was said (transcribe_source with script), so the captions follow the kept take. Before you say a pass is done, \
+  run check_rules and fix everything it lists (gaps, fillers, words kept twice, capitals, numbers as digits, full \
+  stops), then run it again, until it is clean or what is left is named in your report with why. A pass is not done \
+  while check_rules lists something you did not name.
+
   A reel can be made of several videos, its clips in the order they play; get_paragraphs and get_words go clip by clip \
   and name each clip's video. To put a part somewhere else, use move_range (start, end, to); to put in a part of any \
   video between two places, use insert_clip (video main, a source id or a path, in and out of that video, at). get_words \

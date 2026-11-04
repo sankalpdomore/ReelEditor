@@ -289,6 +289,12 @@ let coreTools: [ReelTool] = [
       return ["cuts": .array(made), "ranges": .number(Double(list.count))]
     }
   },
+  ReelTool(name: "resize_cut", description: "Moves the edges of one cut: the cut at at (edit seconds, any time inside it, a range cut or a run of cut words) now runs from start to end, longer or shorter, as dragging its handles on the timeline does. Its words come back and the new span is one range cut, waiting for approval when the old cut was. One undo step.", inputSchema: obj([
+    "project": projectArg, "at": sec("A time inside the cut to change, edit seconds."), "start": sec("Its new start, edit seconds."), "end": sec("Its new end, edit seconds."),
+  ], ["project", "at", "start", "end"])) { i in
+    if let n = try? name(i) { Focus.set(n, "Moving a cut's edges", i["start"]!.double!, i["end"]!.double!) }
+    return try edit(i, "resize_cut") { e, _, m in let r = try resizeCut(e, m, at: i["at"]!.double!, start: i["start"]!.double!, end: i["end"]!.double!); e = r.edl; return r.info }
+  },
   ReelTool(name: "restore_range", description: "Brings back a range cut_range took out: cuts inside start to end are removed, a cut that crosses an end is shortened. Cut words come back with restore_words.", inputSchema: obj(["project": projectArg, "start": sec("Start of the range to bring back."), "end": sec("End of the range.")], ["project", "start", "end"])) { i in
     try edit(i, "restore_range") { e, _, m in let r = try restoreRange(e, m, i["start"]!.double!, i["end"]!.double!); e = r.edl; return r.info }
   },
@@ -502,7 +508,7 @@ let coreTools: [ReelTool] = [
     let target = i["path"]?.string.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
     let caps = i["captions"]?.bool, title = i["title"]?.bool
     if i["wait"]?.bool == true { return ["project": .string(n), "result": try await Jobs.export(n, to: target, captions: caps, title: title)] }
-    Store.setStatus(n, ["state": "exporting", "kind": "export", "progress": 0, "message": "Queued"])
+    Store.setStatus(n, ["state": "exporting", "kind": "export", "progress": 0, "message": "Queued", "pid": .number(Double(getpid()))])
     Task.detached { _ = try? await Jobs.export(n, to: target, captions: caps, title: title) }
     return ["project": .string(n), "started": true, "file": .string((target ?? Jobs.defaultExportURL(n)).path)]
   },
@@ -631,7 +637,7 @@ let coreTools: [ReelTool] = [
 
 // Every tool: the Mac app's own, the ones ported from the web editor (ToolsWeb.swift) and the web editor's names for the
 // Mac tools that do the same thing (list_reels, get_timeline, import_video).
-public let reelTools: [ReelTool] = { let base = coreTools + webTools + auditTools + focusTools + captionTools; return base + webAliases(base) }()
+public let reelTools: [ReelTool] = { let base = coreTools + webTools + auditTools + focusTools + captionTools + ruleCheckTools; return base + webAliases(base) }()
 
 public let toolByName: [String: ReelTool] = Dictionary(uniqueKeysWithValues: reelTools.map { ($0.name, $0) })
 

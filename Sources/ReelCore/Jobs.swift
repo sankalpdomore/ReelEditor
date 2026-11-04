@@ -107,10 +107,10 @@ public enum Jobs {
 
   // A transcription that was going when the process running it ended (the app quit, or was rebuilt): its status still
   // says transcribing, with the id of a process that is gone.
-  public static func interrupted(_ name: String) -> Bool {
+  public static func interrupted(_ name: String, kind: String = "transcribe") -> Bool {
     let s = Store.status(name)
-    guard s["state"]?.string == "transcribing", s["kind"]?.string == "transcribe" else { return false }
-    guard let pid = s["pid"]?.int else { return (s["updatedAt"]?.double).map { Date().timeIntervalSince1970 - $0 > 1800 } ?? true }
+    guard s["state"]?.string == (kind == "export" ? "exporting" : "transcribing"), s["kind"]?.string == kind else { return false }
+    guard let pid = s["pid"]?.int else { return (s["updatedAt"]?.double).map { Date().timeIntervalSince1970 - $0 > (kind == "export" ? 120 : 1800) } ?? true }
     return kill(pid_t(pid), 0) != 0 && errno == ESRCH
   }
 
@@ -176,7 +176,7 @@ public enum Jobs {
         try? await Task.sleep(nanoseconds: 500_000_000)
         if Task.isCancelled { break } // woken by the cancel: the export is over, its own status follows
         let p = from + (to - from) * Double(session.progress)
-        Store.setStatus(name, ["state": "exporting", "kind": "export", "progress": .number(p), "message": .string("\(what) \(Int(p * 100))%")])
+        Store.setStatus(name, ["state": "exporting", "kind": "export", "progress": .number(p), "message": .string("\(what) \(Int(p * 100))%"), "pid": .number(Double(getpid()))])
       }
     }
     await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in session.exportAsynchronously { c.resume() } }
@@ -194,7 +194,7 @@ public enum Jobs {
     if out.standardizedFileURL.path == URL(fileURLWithPath: l.project.main.file).standardizedFileURL.path || l.project.edits.sources.contains(where: { $0.file == out.path }) {
       throw ToolError("invalid_path", "The export cannot overwrite a source video")
     }
-    Store.setStatus(name, ["state": "exporting", "kind": "export", "progress": 0, "message": "Building the composition"])
+    Store.setStatus(name, ["state": "exporting", "kind": "export", "progress": 0, "message": "Building the composition", "pid": .number(Double(getpid()))])
     do {
       try FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
       try? FileManager.default.removeItem(at: out)

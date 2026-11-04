@@ -44,6 +44,8 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
   @Published var selection: ReelCore.Range? = nil // edit time
   @Published var selectedWords: ClosedRange<Int>? = nil
   @Published var selectedAnimation: String? = nil
+  @Published var exportOpen = false // the export modal: open from the start of an export, from the app or an agent, until closed
+  @Published var selectedCut: ReelCore.Range? = nil // a cut clicked on the timeline, with handles on its edges (edit time)
   @Published private(set) var status: JSON = [:]
   @Published private(set) var agentFocus: AgentFocus? = nil // what Claude is working on, lit up in the transcript
   // The paragraphs Claude has gone through since it started reading this reel (Sankalp, 2 Nov 2026): while it works, the
@@ -149,6 +151,8 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
       if nums.count == 2 {
         if sel.hasPrefix("words") { selectedWords = Int(nums[0])...Int(nums[1]) } else { selection = ReelCore.Range(s: nums[0], e: nums[1]) }
       }
+      // cut:12.5 selects the cut at that time, with its handles.
+      if sel.hasPrefix("cut"), let t = nums.first { selectedCut = plan.cuts.first { t >= $0.s && t <= $0.e } }
     }
   }
 
@@ -227,6 +231,13 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
   private func poll() {
     let was = status["state"]?.string
     status = Store.status(name)
+    // An export whose process ended before it finished (the app quit, an agent's reel-mcp closed) would wait forever and
+    // keep the export modal up: it is marked stopped, so the modal says so and can be closed.
+    if status["state"]?.string == "exporting", Jobs.interrupted(name, kind: "export") {
+      Store.setStatus(name, ["state": "error", "kind": "export", "progress": status["progress"] ?? 0, "message": "The export stopped before it finished: the app or the agent running it closed. Export again."])
+      status = Store.status(name)
+    }
+    if status["state"]?.string == "exporting", !exportOpen { withAnimation(.cardOpen) { exportOpen = true } }
     let locked = editingNow
     if locked != claudeEditing {
       claudeEditing = locked
@@ -442,6 +453,8 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
   }
 
   // Export from the top bar's button or Cmd E: asks where to save the MP4, the project's exports folder by default.
+  func closeExport() { withAnimation(.cardClose) { exportOpen = false } }
+
   func chooseExport() {
     guard status["state"]?.string != "exporting" else { return }
     let panel = NSSavePanel()
@@ -454,11 +467,10 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
   func export(to url: URL) {
     let n = name
     Log.write("app", "export", args: ["project": .string(n), "file": .string(url.path)])
-    Store.setStatus(n, ["state": "exporting", "kind": "export", "progress": 0, "message": "Starting"])
+    Store.setStatus(n, ["state": "exporting", "kind": "export", "progress": 0, "message": "Starting", "pid": .number(Double(getpid()))])
     status = Store.status(n)
-    Task {
-      do { let r = try await Jobs.export(n, to: url); if let f = r["file"]?.string { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: f)]) } }
-      catch { self.error = String(describing: error) }
-    }
+    withAnimation(.cardOpen) { exportOpen = true }
+    // The modal shows how it went and offers Show in Finder, so Finder no longer opens on its own.
+    Task { _ = try? await Jobs.export(n, to: url) }
   }
 }

@@ -564,6 +564,8 @@ struct MainView: View {
     }
     // The rule books modal, over everything but the dropdown menus.
     .overlay { if app.rulesOpen { RuleBooksModal(app: app) } }
+    // The export modal, over everything while an export runs.
+    .overlay { if let e = app.editor { ExportModalHost(model: e) } }
   }
 }
 

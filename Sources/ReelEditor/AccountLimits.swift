@@ -104,11 +104,7 @@ struct PlanUsage: Equatable, Sendable { let windows: [PlanWindow]; let status: S
 
   struct ProbeError: Error { let message: String }
 
-  nonisolated static var claudeBinary: String? {
-    let home = NSHomeDirectory()
-    return ["\(home)/.local/bin/claude", "\(home)/.claude/local/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude", "\(home)/.npm-global/bin/claude", "\(home)/.bun/bin/claude"]
-      .first { FileManager.default.isExecutableFile(atPath: $0) }
-  }
+  nonisolated static var claudeBinary: String? { Decipher.claudeBinary }
 
   // The account's plan from claude auth status, which reads the sign in without calling the model.
   nonisolated static func plan(_ profile: String) -> String? {

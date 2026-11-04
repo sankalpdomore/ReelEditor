@@ -172,6 +172,11 @@ struct EditorView: View {
         default: break
         }
       }
+      // The export modal takes the keyboard: Escape or Return closes it once the export is over, nothing reaches the editor.
+      if let model, model.exportOpen {
+        if [53, 36].contains(e.keyCode), model.status["state"]?.string != "exporting" { model.closeExport() }
+        return e.modifierFlags.contains(.command) && e.keyCode == 12 ? e : nil // Cmd Q still quits
+      }
       guard let model, e.window?.firstResponder as? NSTextView == nil else { return e }
       let mods = e.modifierFlags.intersection([.command, .option, .control])
       if !mods.isEmpty { return e }
