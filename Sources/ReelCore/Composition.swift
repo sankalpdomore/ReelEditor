@@ -150,7 +150,11 @@ public enum Compose {
       }
     }
 
-    // The picture: AVFoundation's own compositor when nothing needs drawing, else ReelCompositor.
+    // The picture: AVFoundation's own compositor when nothing needs drawing, else ReelCompositor. Its instructions cover
+    // exactly the composition's own length: after scaleTimeRange for a speed other than 1x the tracks end a hair away
+    // from total / speed, and instructions that miss the end by a tick make AVFoundation drop the picture, leaving the
+    // captions and the sound playing over an empty frame (Sankalp's reel at 1.2x, 5 Nov 2026).
+    let covered = CMTimeRange(start: .zero, duration: max(comp.duration, scaled))
     let vc = AVMutableVideoComposition()
     vc.renderSize = render
     vc.frameDuration = CMTime(value: 1, timescale: 30)
@@ -168,10 +172,10 @@ public enum Compose {
       }
       let scene = ReelScene(render: render, speed: speed, mainTrack: vTrack.trackID, main: main, faces: faces, reelLook: reelLook, perLayerLook: perLayer)
       vc.customVideoCompositorClass = ReelCompositor.self
-      vc.instructions = [ReelInstruction(timeRange: CMTimeRange(start: .zero, duration: scaled), scene: scene)]
+      vc.instructions = [ReelInstruction(timeRange: covered, scene: scene)]
     } else {
       let instruction = AVMutableVideoCompositionInstruction()
-      instruction.timeRange = CMTimeRange(start: .zero, duration: scaled)
+      instruction.timeRange = covered
       let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: vTrack)
       for p in placed { layer.setTransform(p.transform, at: sc(p.start)) }
       instruction.layerInstructions = [layer]

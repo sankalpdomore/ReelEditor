@@ -141,8 +141,9 @@ struct DirectHeader<Accessory: View>: View {
       }
       HStack(spacing: 8) {
         Dropdown(options: [("sonnet", "Sonnet"), ("opus", "Opus"), ("haiku", "Haiku")], selection: Binding(get: { direct.model }, set: { direct.model = $0; if direct.state != "off" { direct.restart() } }), icon: "cpu")
-        Dropdown(options: [("default", "Default effort"), ("low", "Low effort"), ("medium", "Medium effort"), ("high", "High effort"), ("xhigh", "Extra high effort"), ("max", "Max effort")],
+        Dropdown(options: [("default", "Default"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra high"), ("max", "Max")],
                  selection: Binding(get: { direct.effort }, set: { direct.effort = $0; if direct.state != "off" { direct.restart() } }), icon: "gauge")
+          .help("Effort")
       }
       HStack(spacing: 8) {
         Circle().fill(direct.state == "off" ? Ink.ghost : Ink.green).frame(width: 6, height: 6)
@@ -169,22 +170,11 @@ struct RulesRow: View {
   @ObservedObject var app: AppModel // the project in front: each project keeps its own rules folder
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: 8) {
-        // The count opens the rule books in a modal, to read each one.
-        Button { app.openRules() } label: {
-          IconLabel("\(direct.rules.count) rule \(direct.rules.count == 1 ? "book" : "books")", icon: "book-open-text", size: 14).fixedSize()
-        }
-        .pill(.ghost, .xs).padding(.leading, -12)
-        .help("Read this project's rule books")
-        Spacer(minLength: 4)
-        Button { choose() } label: { IconLabel("Change", icon: "folder-simple-plus", size: 12) }.pill(.ghost, .xs).fixedSize()
-          .help("Read this project's rule books from another folder. New projects start with it too.")
-        if !Rules.isDefault(URL(fileURLWithPath: direct.rulesDir)) {
-          Button { direct.setRulesFolder(nil) } label: { IconLabel("Default", icon: "arrow-counter-clockwise", size: 12) }.pill(.ghost, .xs).fixedSize()
-            .help("Read this project's rule books from the Reel Editor folder's _rules")
-        }
-        Button { NSWorkspace.shared.open(URL(fileURLWithPath: direct.rulesDir)) } label: { Icon("folder-open", size: 12) }.pill(.ghost, .iconSm)
-          .help("Show the rules folder in Finder")
+      // Change and Default lose their words when the chat is too narrow for them, so the row never pushes the panel wider
+      // than the window (Sankalp, 5 Nov 2026).
+      ViewThatFits(in: .horizontal) {
+        actions(labels: true)
+        actions(labels: false)
       }
       Text(direct.rulesDir.replacingOccurrences(of: NSHomeDirectory(), with: "~")).font(.inter(12)).foregroundStyle(Ink.faint)
         .lineLimit(1).truncationMode(.middle)
@@ -192,6 +182,32 @@ struct RulesRow: View {
     }
     .onAppear { direct.reloadRules() }
     .onChange(of: app.selected) { _, _ in direct.reloadRules() }
+  }
+
+  func actions(labels: Bool) -> some View {
+    HStack(spacing: 8) {
+      // The count opens the rule books in a modal, to read each one.
+      Button { app.openRules() } label: {
+        IconLabel("\(direct.rules.count) rule \(direct.rules.count == 1 ? "book" : "books")", icon: "book-open-text", size: 14).fixedSize()
+      }
+      .pill(.ghost, .xs).padding(.leading, -12)
+      .help("Read this project's rule books")
+      Spacer(minLength: 4)
+      Group {
+        if labels { Button { choose() } label: { IconLabel("Change", icon: "folder-simple-plus", size: 12) }.pill(.ghost, .xs).fixedSize() }
+        else { Button { choose() } label: { Icon("folder-simple-plus", size: 12) }.pill(.ghost, .iconSm) }
+      }
+      .help("Read this project's rule books from another folder. New projects start with it too.")
+      if !Rules.isDefault(URL(fileURLWithPath: direct.rulesDir)) {
+        Group {
+          if labels { Button { direct.setRulesFolder(nil) } label: { IconLabel("Default", icon: "arrow-counter-clockwise", size: 12) }.pill(.ghost, .xs).fixedSize() }
+          else { Button { direct.setRulesFolder(nil) } label: { Icon("arrow-counter-clockwise", size: 12) }.pill(.ghost, .iconSm) }
+        }
+        .help("Read this project's rule books from the Reel Editor folder's _rules")
+      }
+      Button { NSWorkspace.shared.open(URL(fileURLWithPath: direct.rulesDir)) } label: { Icon("folder-open", size: 12) }.pill(.ghost, .iconSm)
+        .help("Show the rules folder in Finder")
+    }
   }
 
   func choose() {
@@ -373,7 +389,13 @@ struct ChatItemRow: View {
 struct ChatUsageRow: View {
   @ObservedObject var direct: DirectChat
   var body: some View {
-    let u = direct.usage
+    // While Claude works the count runs on, read again every 5 seconds from each call it has made (Sankalp, 5 Nov 2026).
+    let working = direct.state == "thinking"
+    SwiftUI.TimelineView(.periodic(from: .now, by: working ? 5 : 3600)) { _ in row(working ? direct.usageNow : direct.usage, working: working) }
+      .task(id: direct.profile) { await direct.updateShare() }
+  }
+
+  func row(_ u: ChatUsage, working: Bool) -> some View {
     // Two rows, so nothing is cut off in a narrow chat (Sankalp, 2 Nov 2026): the tokens first, then the share of the
     // 5 hour limit with the turns and tools under them.
     HStack(alignment: .top, spacing: 8) {
@@ -381,8 +403,10 @@ struct ChatUsageRow: View {
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
           Text("This chat").font(.inter(12, .medium)).foregroundStyle(Ink.secondary)
-          Text(u.turns == 0 ? "nothing used yet" : "\(Self.count(u.tokens)) tokens").font(.inter(12, u.turns == 0 ? .regular : .semibold))
-            .foregroundStyle(u.turns == 0 ? Ink.faint : Ink.strong)
+          let none = u.turns == 0 && u.tokens == 0
+          Text(none ? "nothing used yet" : "\(Self.count(u.tokens)) tokens\(working ? " so far" : "")").font(.inter(12, none ? .regular : .semibold))
+            .foregroundStyle(none ? Ink.faint : Ink.strong)
+            .contentTransition(.numericText()).animation(.default, value: u.tokens)
         }
         if u.turns > 0 {
           HStack(spacing: 8) {
@@ -395,7 +419,6 @@ struct ChatUsageRow: View {
       Spacer(minLength: 0)
     }
     .help(help(u))
-    .task(id: direct.profile) { await direct.updateShare() }
   }
 
   func help(_ u: ChatUsage) -> String {

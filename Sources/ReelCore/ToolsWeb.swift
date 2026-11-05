@@ -282,10 +282,53 @@ let webTools: [ReelTool] = [
       return ["references": .number(Double(clean.count))]
     }
   },
-  ReelTool(name: "set_reel_status", description: "Sets where a reel stands, saved as status: draft while it is being made, live once it is posted. A reel never set reads as draft, and set_draft_published sets live. A setting, not an undo step.", inputSchema: obj([
-    "project": projectArg, "status": ["type": "string", "enum": ["draft", "live"]],
+  ReelTool(name: "set_reel_status", description: "Sets where a reel stands, saved as status: draft while it is being made, live once it is posted (published is taken as live). A reel never set reads as draft; set_draft_published and add_post_link set live. A setting, not an undo step.", inputSchema: obj([
+    "project": projectArg, "status": ["type": "string", "enum": ["draft", "live", "published"]],
   ], ["project", "status"])) { i in
-    try setting(i, "set_reel_status") { e in e.status = i["status"]!.string! == "live" ? "live" : nil; return ["status": i["status"]!] }
+    let live = i["status"]!.string! != "draft"
+    return try setting(i, "set_reel_status") { e in e.status = live ? "live" : nil; return ["status": .string(live ? "live" : "draft")] }
+  },
+  ReelTool(name: "add_post_link", description: "Records where the reel was published, saved in the project file as posts: the platform (LinkedIn, X, Instagram, YouTube, TikTok, Facebook, Threads or any other; read from the link when left out), the post's url, when it was posted (ISO 8601) and a note. A link already recorded is updated, not added twice. Sets the reel's status to live unless live is false. Any agent can call it, so an agent that posted the reel or knows its links records them here. A record, not an undo step.", inputSchema: obj([
+    "project": projectArg,
+    "url": ["type": "string", "minLength": 8, "maxLength": 600, "description": "The post's link, https."],
+    "platform": ["type": "string", "maxLength": 40],
+    "postedAt": ["type": "string", "maxLength": 40, "description": "When it was posted, ISO 8601."],
+    "note": ["type": "string", "maxLength": 400],
+    "live": ["type": "boolean", "default": true],
+  ], ["project", "url"])) { i in
+    let url = i["url"]!.string!.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let u = URL(string: url), let scheme = u.scheme?.lowercased(), scheme == "https" || scheme == "http", u.host != nil else { throw ToolError("invalid_url", "Give the post's full link, starting https://") }
+    let platform = ReelPost.platformName(i["platform"]?.string, url: url)
+    var added = false
+    let r = try setting(i, "add_post_link") { e in
+      var posts = e.posts ?? []
+      let stamp = ISO8601DateFormatter().string(from: Date())
+      if let k = posts.firstIndex(where: { $0.url == url }) {
+        posts[k].platform = platform
+        if let d = i["postedAt"]?.string { posts[k].postedAt = d }
+        if let n = i["note"]?.string { posts[k].note = n }
+      } else {
+        posts.append(ReelPost(platform: platform, url: url, postedAt: i["postedAt"]?.string, note: i["note"]?.string, added: stamp)); added = true
+      }
+      e.posts = posts
+      if i["live"]?.bool != false { e.status = "live" }
+      return ["posts": JSON.from(posts), "status": .string(e.status ?? "draft")]
+    }
+    guard case .object(var o) = r else { return r }
+    o["added"] = .bool(added); o["platform"] = .string(platform)
+    return .object(o)
+  },
+  ReelTool(name: "remove_post_link", description: "Takes a link out of where the reel was published (posts). The status stays as it is; set it with set_reel_status. A record, not an undo step.", inputSchema: obj([
+    "project": projectArg, "url": ["type": "string", "minLength": 1, "maxLength": 600],
+  ], ["project", "url"])) { i in
+    let url = i["url"]!.string!.trimmingCharacters(in: .whitespacesAndNewlines)
+    return try setting(i, "remove_post_link") { e in
+      let before = e.posts ?? []
+      guard before.contains(where: { $0.url == url }) else { throw ToolError("not_found", "No post with the link \(url); get_project lists them under posts") }
+      let left = before.filter { $0.url != url }
+      e.posts = left.isEmpty ? nil : left
+      return ["posts": JSON.from(left), "removed": .string(url)]
+    }
   },
   ReelTool(name: "record_generation_cost", description: "Records what the reel's AI generations cost, saved as cost with a total per currency and in rupees. Call it as each generation is made: an Argon video (kind argon-video, ₹16.25 each when cost is left out; a video from another account gets cost 0 and its account named) or a HeyGen voice take (kind heygen-voice with its seconds, 1 credit a minute at $0.049 a credit when credits and cost are left out; give credits with basis measured when the balance was read before and after). A failed try is recorded with failed true and costs nothing. Lines are added; replace true sets the whole list, and remove takes line ids (g1, g2 and so on) out. A record, not an undo step.", inputSchema: obj([
     "project": projectArg,

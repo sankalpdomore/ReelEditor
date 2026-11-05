@@ -181,6 +181,30 @@ public struct CaptionPos: Codable, Equatable, Sendable {
 
 // A document or file a reel is made from, shown beside its transcript: a format doc (a path inside content/documents, no .md)
 // or a JSON file.
+// A place the reel was published (Sankalp, 5 Nov 2026): the platform (LinkedIn, X, Instagram, YouTube, TikTok or any
+// other), the post's link, when it went up and a note. Saved in the project file, so the reel keeps where it lives.
+public struct ReelPost: Codable, Equatable, Sendable {
+  public var platform: String
+  public var url: String
+  public var postedAt: String? = nil // ISO 8601 date or date and time, as given
+  public var note: String? = nil
+  public var added: String? = nil // when it was recorded
+  public init(platform: String, url: String, postedAt: String? = nil, note: String? = nil, added: String? = nil) {
+    self.platform = platform; self.url = url; self.postedAt = postedAt; self.note = note; self.added = added
+  }
+
+  // The platform's usual name from what was given or the link's host, so LinkedIn is LinkedIn however it was written.
+  public static func platformName(_ given: String?, url: String) -> String {
+    let known: [(String, [String])] = [("LinkedIn", ["linkedin"]), ("X", ["x", "twitter", "x.com", "twitter.com"]), ("Instagram", ["instagram", "ig"]),
+                                       ("YouTube", ["youtube", "yt", "youtu.be"]), ("TikTok", ["tiktok"]), ("Facebook", ["facebook", "fb"]), ("Threads", ["threads"])]
+    let g = (given ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+    if !g.isEmpty { return known.first { $0.1.contains(g) || $0.0.lowercased() == g }?.0 ?? given!.trimmingCharacters(in: .whitespaces) }
+    let host = (URL(string: url)?.host ?? "").lowercased().replacingOccurrences(of: "www.", with: "")
+    for (name, keys) in known where keys.contains(where: { host == $0 || host.hasSuffix("." + $0) || host.hasPrefix($0 + ".") }) { return name }
+    return host.isEmpty ? "Link" : host
+  }
+}
+
 public struct ReelReference: Codable, Equatable, Sendable {
   public var kind: String // format or json
   public var title: String

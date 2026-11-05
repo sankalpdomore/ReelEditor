@@ -647,18 +647,42 @@ struct ProjectSettingsMenu: View {
   }
 }
 
-// The Draft or Live pill beside the reel's name; a click switches it (set_reel_status).
+// The Draft or Live pill beside the reel's name; a click switches it (set_reel_status) and lists where the reel was
+// published, each link opening in the browser (add_post_link, Sankalp, 5 Nov 2026).
 struct StatusMenu: View {
   @ObservedObject var model: EditorModel
   @State private var open = false
+  static func icon(_ platform: String) -> String {
+    ["LinkedIn": "linkedin-logo", "X": "x-logo", "Instagram": "instagram-logo", "YouTube": "youtube-logo", "TikTok": "tiktok-logo",
+     "Facebook": "facebook-logo", "Threads": "threads-logo"][platform] ?? "link"
+  }
   var body: some View {
+    let posts = model.loaded.project.edits.posts ?? []
     Button { open.toggle() } label: { StatusPill(kind: model.live ? .live : .draft) }
       .buttonStyle(.plain)
-      .help("Where the reel stands: Draft while it is made, Live once posted")
+      .help(posts.isEmpty ? "Where the reel stands: Draft while it is made, Live once posted" : "Live on " + posts.map(\.platform).joined(separator: ", "))
       .popover(isPresented: $open, arrowEdge: .bottom) {
-        OptionList(options: [("draft", "Draft"), ("live", "Live, posted")], selected: model.live ? "live" : "draft", icons: ["draft": "note-pencil", "live": "check-circle"]) { s in
-          model.run("set_reel_status", ["status": .string(s)]); open = false
+        VStack(alignment: .leading, spacing: 0) {
+          OptionList(options: [("draft", "Draft"), ("live", "Live, posted")], selected: model.live ? "live" : "draft", icons: ["draft": "note-pencil", "live": "check-circle"]) { s in
+            model.run("set_reel_status", ["status": .string(s)]); open = false
+          }
+          if !posts.isEmpty {
+            Hairline()
+            VStack(alignment: .leading, spacing: 0) {
+              Text("PUBLISHED ON").font(.inter(11, .semibold)).foregroundStyle(Ink.faint).padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 4)
+              ForEach(posts, id: \.url) { p in
+                OptionRow(label: p.platform + (p.postedAt.map { "  " + String($0.prefix(10)) } ?? ""), icon: Self.icon(p.platform)) {
+                  if let u = URL(string: p.url) { NSWorkspace.shared.open(u) }
+                  open = false
+                }
+                .help(p.url + (p.note.map { "\n" + $0 } ?? ""))
+              }
+            }
+            .padding(4)
+          }
         }
+        .frame(minWidth: 220)
+        .background(Ink.page)
       }
   }
 }

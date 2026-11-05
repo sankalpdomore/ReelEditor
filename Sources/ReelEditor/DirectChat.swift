@@ -38,6 +38,15 @@ struct ChatUsage: Codable, Equatable {
   var turns = 0
   var tools = 0
   var tokens: Double { input + output + cacheRead + cacheWrite }
+  var weight: Double { input + output + cacheWrite + cacheRead / 10 }
+
+  // The usage one API call or one turn reported, as the command line names its keys.
+  init() {}
+  init(_ u: [String: Any]) {
+    let n = { (k: String) in (u[k] as? NSNumber)?.doubleValue ?? 0 }
+    input = n("input_tokens"); output = n("output_tokens"); cacheRead = n("cache_read_input_tokens"); cacheWrite = n("cache_creation_input_tokens")
+  }
+  mutating func add(_ o: ChatUsage) { input += o.input; output += o.output; cacheRead += o.cacheRead; cacheWrite += o.cacheWrite }
 }
 
 // One project's chat: its conversation, what it used and the Claude running for it. key is the project's name, empty for
@@ -63,6 +72,18 @@ struct ChatUsage: Codable, Equatable {
   var interrupting: DispatchWorkItem?
   var queuedComments: [(shown: String, extra: String)] = []
   var recovered = false // this request already restarted Claude once because its context was full
+  // The tokens of the turn running now, counted from each API call as Claude makes it (Sankalp, 5 Nov 2026), so the chat
+  // shows them while Claude works instead of one big number at the end. Keyed by the call's message id, since every
+  // part of one answer repeats its call's usage. Replaced by the turn's own total when it ends.
+  var live: [String: ChatUsage] = [:]
+  var liveUsage: ChatUsage { live.values.reduce(into: ChatUsage()) { $0.add($1) } }
+  // The tokens a turn that ended without its result had used: kept in the chat's count.
+  func keepLive() {
+    guard !live.isEmpty else { return }
+    let l = liveUsage; live = [:]
+    usage.add(l); usage.log = (usage.log ?? []) + [ChatTurn(t: Date(), weight: l.weight)]
+    save()
+  }
 
   var project: String? { key.isEmpty ? nil : key }
   // A project's chat is kept beside its project file, <name>-chat-history.json, the messages and what the chat used in one
@@ -122,6 +143,8 @@ struct ChatUsage: Codable, Equatable {
   var messages: [DirectMessage] { front.messages }
   var state: String { front.state }
   var usage: ChatUsage { front.usage }
+  // What the chat has used with the turn running now, read by the usage row every 5 seconds while Claude works.
+  var usageNow: ChatUsage { var u = front.usage; u.add(front.liveUsage); return u }
   var fiveHour: (chat: Double, account: Double, resets: Date?)? { front.fiveHour }
 
   // Whether a project's Claude is working on what it was asked, for the editor to hold Sankalp's edits meanwhile.
@@ -289,14 +312,48 @@ struct ChatUsage: Codable, Equatable {
   Animation layer with add_text_layer (for a part of the reel or whole true), styled the same way, with enter and exit \
   motions; update_text_layer changes one. list_fonts lists the fonts. When you talk about a clip, call it clip 5 for \
   the clip the tools call c5, as the app shows it, never c5.
+
+  The reel's status is draft or live: when he says it is published, posted or live, set it with set_reel_status (status \
+  live), and back to draft the same way. Where it was published is kept in the project file as posts, one link per \
+  platform post (LinkedIn, X, Instagram, YouTube and the rest): record each link he gives with add_post_link (it sets \
+  the status to live too), remove one with remove_post_link, and read them in get_project under posts. When he asks you \
+  to find the links and live-assistant tools are there, call list_agents and pick the agent working in the ContentApp \
+  folder (it posts the reels), preferring one whose account has room, then send_to_agent it one self-contained message: \
+  the project's name exactly as the tools take it, the reel's title, its caption and the date, asking it to find the \
+  posts of this reel and record each one itself with the reel-editor tool add_post_link (project, url, platform, \
+  postedAt). That agent has the reel-editor tools, and its reply may not come back into this chat, so the links reach \
+  the project through that tool; tell Sankalp it was sent, and to ask again later so you read get_project for them.
+
+  When he asks for a caption for Instagram, or any other text to paste somewhere (a post caption, a title, hashtags, a \
+  description), write it inside one fenced code block, the whole text to paste and nothing else in it, so the chat shows \
+  it with a Copy button. Write the code block as plain text, with no language after the fence.
   """
+
+  // The LiveAssistant tools the chat's Claude may use: seeing the other agents and handing them work. Speaking out loud,
+  // the screen and the Macs stay with Sankalp's own sessions.
+  static let liveTools = ["list_agents", "list_accounts", "send_to_agent"]
+
+  // The live-assistant MCP server as the account's Claude Code has it: ~/.claude.json for the first account, the
+  // .claude.json inside ~/.<profile> for the others; nil when it is not set up there.
+  nonisolated static func liveAssistant(_ profile: String) -> [String: Any]? {
+    let home = NSHomeDirectory()
+    let file = profile == "claude" ? "\(home)/.claude.json" : "\(home)/.\(profile)/.claude.json"
+    guard let d = FileManager.default.contents(atPath: file), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+          let servers = o["mcpServers"] as? [String: Any], let s = servers["live-assistant"] as? [String: Any] else { return nil }
+    return s
+  }
 
   // Starts the Claude of a project's chat (the one in front unless given), with that project's rule books.
   func start(_ chat: ChatSession? = nil) {
     let s = chat ?? front
     guard s.proc == nil, let bin = AccountLimits.claudeBinary else { if AccountLimits.claudeBinary == nil { append("error", "The claude command line was not found", to: s) }; return }
     let mcpPath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent().appendingPathComponent("reel-mcp").path
-    let config: [String: Any] = ["mcpServers": ["reel-editor": ["command": mcpPath, "env": ["REEL_MCP_SESSION_NAME": "Reel Editor chat"]]]]
+    var servers: [String: Any] = ["reel-editor": ["command": mcpPath, "env": ["REEL_MCP_SESSION_NAME": "Reel Editor chat"]]]
+    // LiveAssistant, when the account has it, so the chat's Claude can ask Sankalp's other agents (the content app's,
+    // which posts the reels) for the links of a published reel (Sankalp, 5 Nov 2026).
+    let live = Self.liveAssistant(profile)
+    if let live { servers["live-assistant"] = live }
+    let config: [String: Any] = ["mcpServers": servers]
     guard let configJSON = String(data: (try? JSONSerialization.data(withJSONObject: config)) ?? Data(), encoding: .utf8) else { return }
     let dir = Store.root.appendingPathComponent("_direct")
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -313,7 +370,7 @@ struct ChatUsage: Codable, Equatable {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: bin)
     p.arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--model", model,
-                   "--mcp-config", configJSON, "--strict-mcp-config", "--allowedTools", "mcp__reel-editor", "--tools", "",
+                   "--mcp-config", configJSON, "--strict-mcp-config", "--allowedTools", (live == nil ? ["mcp__reel-editor"] : ["mcp__reel-editor"] + Self.liveTools.map { "mcp__live-assistant__" + $0 }).joined(separator: ","), "--tools", "",
                    "--setting-sources", "", "--no-session-persistence", "--system-prompt-file", promptFile.path]
       + (effort == "default" ? [] : ["--effort", effort])
     // A whole trim pass reads long pages of words and runs the audio audit, which can take minutes: room for both.
@@ -346,13 +403,14 @@ struct ChatUsage: Codable, Equatable {
     p?.terminate()
     s.interrupting?.cancel(); s.interrupting = nil
     if let p = s.project { Focus.clear(p) }
+    s.keepLive()
     s.state = "off"
   }
 
   func restart() { let s = front; stop(s); start(s) }
 
   // Clears the chat of the project in front; the other projects' chats are kept.
-  func clear() { let s = front; s.messages = []; s.usage = ChatUsage(); s.fiveHour = nil; s.save(); AppModel.shared.editor?.resetReview() }
+  func clear() { let s = front; s.messages = []; s.usage = ChatUsage(); s.live = [:]; s.fiveHour = nil; s.save(); AppModel.shared.editor?.resetReview() }
 
   func updateShare() async {
     let s = front
@@ -444,6 +502,7 @@ struct ChatUsage: Codable, Equatable {
     case "assistant":
       guard let m = o["message"] as? [String: Any], let content = m["content"] as? [[String: Any]] else { return }
       let id = m["id"] as? String
+      if let u = m["usage"] as? [String: Any] { s.live[id ?? UUID().uuidString] = ChatUsage(u) }
       for c in content {
         // The bare Prompt is too long that comes as an answer when the context is full is the turn's error, shown (or
         // recovered from) with the result, not a bubble of Claude's.
@@ -478,12 +537,11 @@ struct ChatUsage: Codable, Equatable {
       }
       if let u = o["usage"] as? [String: Any] {
         for k in ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"] { if let v = u[k] as? NSNumber { extra[k] = .number(v.doubleValue) } }
-        let n = { (k: String) in (u[k] as? NSNumber)?.doubleValue ?? 0 }
-        s.usage.input += n("input_tokens"); s.usage.output += n("output_tokens")
-        s.usage.cacheRead += n("cache_read_input_tokens"); s.usage.cacheWrite += n("cache_creation_input_tokens")
-        let w = n("input_tokens") + n("output_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens") / 10
-        s.usage.log = (s.usage.log ?? []) + [ChatTurn(t: Date(), weight: w)]
-      }
+        let turn = ChatUsage(u)
+        s.usage.add(turn)
+        s.usage.log = (s.usage.log ?? []) + [ChatTurn(t: Date(), weight: turn.weight)]
+        s.live = [:]
+      } else { s.keepLive() }
       s.usage.turns += 1
       if let p = s.project { Focus.clear(p) } // the turn is over: nothing is being worked on
       if s.key == (project ?? "") { reloadRules() } // Claude may have written rule books
@@ -571,6 +629,7 @@ struct ChatUsage: Codable, Equatable {
   private func ended(_ s: ChatSession, _ p: Process) {
     guard s.proc === p else { return } // a Claude already replaced or stopped
     s.proc = nil; s.input = nil
+    s.keepLive()
     if s.state != "off" { s.state = "off"; append("error", "Claude stopped. Your next message starts it again.", to: s) }
   }
 }

@@ -116,6 +116,7 @@ public struct Edl: Codable, Equatable, Sendable {
   public var captionHides: [CaptionHide]? = nil // stretches with no captions, edit seconds; part of undo
   public var caption: String? = nil // the caption to post with the reel
   public var status: String? = nil // draft (nil) or live
+  public var posts: [ReelPost]? = nil // where the reel was published: a link per post (add_post_link)
   public var references: [ReelReference]? = nil // the documents the reel is made from
   public var cost: ReelCost? = nil // what its AI generations cost
   public init() {}

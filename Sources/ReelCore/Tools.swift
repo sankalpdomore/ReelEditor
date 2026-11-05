@@ -102,7 +102,7 @@ public enum ReelState {
       "look": edl.look.map { JSON.from($0) } ?? .null, "music": edl.music.map { JSON.from($0) } ?? .null, "musicFile": Compose.musicFile(edl).map { .string($0.path) } ?? .null,
       "voiceGain": .number(edl.voiceGain ?? 1), "voiceEq": edl.voiceEq.map { JSON.from($0) } ?? .null, "captionPos": edl.captionPos.map { JSON.from($0) } ?? .null,
       "captionStyle": edl.captionStyle.map { JSON.from($0) } ?? .null, "captionHides": hideList(edl.captionHides ?? []),
-      "caption": edl.caption.map { .string($0) } ?? .null, "status": .string(edl.status ?? "draft"), "references": JSON.from(edl.references ?? []), "cost": edl.cost.map { JSON.from($0) } ?? .null,
+      "caption": edl.caption.map { .string($0) } ?? .null, "status": .string(edl.status ?? "draft"), "posts": JSON.from(edl.posts ?? []), "references": JSON.from(edl.references ?? []), "cost": edl.cost.map { JSON.from($0) } ?? .null,
       "titleHides": .array(clipTitleHides(plan).map(r)), "comments": .number(Double(Comments.read(l.project.name).filter { $0.status == "unresolved" }.count)),
       "draft": .bool(Drafts.read(l.project.name) != nil),
       "animations": .array(l.animations.animations.map { a in

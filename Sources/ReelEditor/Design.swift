@@ -768,6 +768,33 @@ struct UsageMeterRow: View {
   func legend(_ c: Color, _ t: String) -> some View { HStack(spacing: 4) { Circle().fill(c).frame(width: 6, height: 6); Text(t).monospacedDigit() } }
 }
 
+// A code block of markdown with a Copy button at its top right, so a caption or anything else Claude writes in one goes to
+// the clipboard in one click (Sankalp, 5 Nov 2026). The button says Copied for a moment after.
+struct CodeBlock: View {
+  let text: String
+  @State private var copied = false
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      HStack {
+        Spacer()
+        Button {
+          NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
+          copied = true
+          DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+        } label: { IconLabel(copied ? "Copied" : "Copy", icon: copied ? "check" : "copy", size: 12) }
+          .pill(.ghost, .xs).fixedSize()
+          .help("Copy to the clipboard")
+      }
+      .padding(.horizontal, 4).padding(.top, 4)
+      Text(text).font(.system(size: 12, design: .monospaced)).foregroundStyle(Ink.text).textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 12).padding(.bottom, 12).frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .background(RoundedRectangle(cornerRadius: 8).fill(Ink.sunken))
+    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Ink.border, lineWidth: 1))
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Markdown: a document's text laid out as the web app's prose, block by block. Headings, bullet and numbered lists
 // (nested by their indent), quotes, code blocks, rules and paragraphs; bold, italic, code and links inside a line.
@@ -807,10 +834,7 @@ struct MarkdownBlocks: View {
         .padding(.leading, 12)
         .overlay(alignment: .leading) { Rectangle().fill(Ink.border).frame(width: 2) }
     case .code(let s):
-      Text(s).font(.system(size: 12, design: .monospaced)).foregroundStyle(Ink.text)
-        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Ink.sunken))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Ink.border, lineWidth: 1))
+      CodeBlock(text: s)
     case .rule:
       Hairline().padding(.vertical, 8)
     case .para(let s):
