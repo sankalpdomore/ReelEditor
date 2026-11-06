@@ -540,7 +540,9 @@ struct AnimationBlock: View {
 struct CutLane: View {
   @ObservedObject var model: EditorModel
   @Environment(\.lanes) private var lanes
-  @State private var drag: (edge: Int, to: Double)? = nil // 0 the start, 1 the end, and where it is being dragged to
+  // 0 the start, 1 the end, and where it is being dragged to. A gesture state, so a drag cut short by a zoom, a scroll or
+  // anything else that takes the gesture away lets go of it, and the box never stays where a drag left it (Sankalp, 6 Nov 2026).
+  @GestureState private var drag: (edge: Int, to: Double)? = nil
 
   var body: some View {
     let top = lanes.video.lowerBound, h = lanes.words.upperBound - lanes.video.lowerBound, z = model.zoom
@@ -565,11 +567,35 @@ struct CutLane: View {
           .allowsHitTesting(false)
         handle(0, at: s, other: e, top: top, h: h)
         handle(1, at: e, other: s, top: top, h: h)
+        // What can be done to the selected cut, above it as the menu of a selected range (Sankalp, 6 Nov 2026): Uncut takes
+        // it away and brings back what it hid, or a comment on it goes to Claude.
+        if drag == nil, !model.claudeEditing {
+          SelectionMenu(canCut: false, canUncut: true, cut: {}, uncut: { model.restoreSelection() },
+            comment: { t in
+              let on = "the cut \(timecode(cut.s)) to \(timecode(cut.e)) of the timeline (edit seconds \(round3(cut.s)) to \(round3(cut.e)))"
+              model.run("add_comment", ["start": .number(round3(cut.s)), "end": .number(round3(cut.e)), "comment": .string(t)]) { res in
+                DirectChat.shared.sendComment(t, on: on, id: res["comment"]?["id"]?.string)
+              }
+            })
+            .offset(x: max(0, cut.s * z), y: lanes.anim.lowerBound)
+            .id("cut-\(cut.s)-\(cut.e)")
+        }
       }
     }
     .onExitCommand { model.selectedCut = nil }
-    // A cut that changed under the selection (an undo, or Claude) lets the selection go.
-    .onChange(of: model.plan.cuts) { _, cuts in if let c = model.selectedCut, !cuts.contains(c) { model.selectedCut = nil } }
+    // A cut that changed under the selection (a resize, an undo, or Claude) stays selected as the cut it became, the one
+    // over most of it, so the box always sits on a cut that is there; with none over it the selection goes.
+    .onChange(of: model.plan.cuts) { _, cuts in
+      guard let c = model.selectedCut, !cuts.contains(c) else { return }
+      let over = cuts.map { ($0, min($0.e, c.e) - max($0.s, c.s)) }.filter { $0.1 > 0 }.max { $0.1 < $1.1 }
+      model.selectedCut = over?.0
+    }
+  }
+
+  // Where a handle is dragged to, in edit seconds: kept inside the reel, and a cut stays at least 0.05 s long.
+  func to(_ g: DragGesture.Value, _ other: Double) -> Double {
+    let x = max(0, min(model.plan.editDuration, g.location.x / model.zoom))
+    return x < other ? min(x, other - 0.05) : max(x, other + 0.05)
   }
 
   func handle(_ edge: Int, at t: Double, other: Double, top: Double, h: Double) -> some View {
@@ -579,17 +605,15 @@ struct CutLane: View {
       .frame(width: 12, height: 40)
       .contentShape(Rectangle().inset(by: -4))
       .onHover { inside in if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
-      .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .named("cutlane")).onChanged { g in
-        // Kept inside the reel, and a cut stays at least 0.05 s long.
-        let x = max(0, min(model.plan.editDuration, g.location.x / z))
-        drag = (edge, edge == 0 ? min(x, other - 0.05) : max(x, other + 0.05))
-      }.onEnded { _ in
-        guard let cut = model.selectedCut, let d = drag else { return }
-        let s = d.edge == 0 ? d.to : cut.s, e = d.edge == 1 ? d.to : cut.e
-        drag = nil
-        model.selectedCut = ReelCore.Range(s: round3(s), e: round3(e))
-        model.run("resize_cut", ["at": .number((cut.s + cut.e) / 2), "start": .number(s), "end": .number(e)])
-      })
+      .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .named("cutlane"))
+        .updating($drag) { g, state, _ in state = (edge, to(g, other)) }
+        .onEnded { g in
+          guard let cut = model.selectedCut else { return }
+          let x = to(g, other)
+          let s = edge == 0 ? x : cut.s, e = edge == 1 ? x : cut.e
+          model.selectedCut = ReelCore.Range(s: round3(s), e: round3(e))
+          model.run("resize_cut", ["at": .number((cut.s + cut.e) / 2), "start": .number(s), "end": .number(e)])
+        })
       .help(edge == 0 ? "Drag to move where the cut starts" : "Drag to move where the cut ends")
       .offset(x: t * z - 6, y: top + (h - 40) / 2)
   }

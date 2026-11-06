@@ -6,7 +6,7 @@ Reel Editor for Mac is Sankalp's native Mac video editor for his talking head an
 
 ## Build, run and test
 
-- `./build.sh` builds in release mode, signs, installs to `~/Applications/Reel Editor.app` and opens it; `./build.sh --no-open` skips opening. Quit the running app first (`osascript -e 'quit app "Reel Editor"'`).
+- `./build.sh` builds in release mode, signs, installs to `~/Applications/Reel Editor.app` and opens it. After a fix, always install with `./build.sh` so the app opens again, never `--no-open`: installing quits the running app (Sankalp, 6 Nov 2026). Quit the running app first (`osascript -e 'quit app "Reel Editor"'`).
 - `swift build` builds debug binaries in `.build/debug` for quick checks.
 - `python3 tests/mcp_test.py .build/debug/reel-mcp <scratch folder>` runs the MCP suite (610 checks) against a fresh projects folder in the scratch folder, with the media in `tests/media`. Run it after any change to `Sources/ReelCore` or `Sources/ReelMCP`, and add checks for new tools.
 - After a visual change, check it in a window snapshot: `REEL_EDITOR_SNAPSHOT=<file.png> .build/debug/ReelEditor` writes the window every few seconds and keeps the app in the background so it never takes the keyboard. `REEL_EDITOR_FLOAT` (captions and voice too), `REEL_EDITOR_SEEK`, `REEL_EDITOR_APP_SETTINGS`, `REEL_EDITOR_SELECT`, `REEL_EDITOR_MCP`, `REEL_EDITOR_OPEN_MENU`, `REEL_EDITOR_DIRECT_SAY` and `REEL_EDITOR_RULES` open a state at launch (README, Look). Report what was seen, and name what a snapshot cannot show (drags, pinch, motion) for Sankalp to try.
@@ -32,3 +32,9 @@ The app uses the ContentApp web app's design language, not stock macOS (Sankalp,
 ## Screenshots
 
 When Sankalp pastes a screenshot path that does not exist, the tilde characters of the iCloud folder were dropped: the real folder is `/Users/sankalpsinha/Library/Mobile Documents/com~apple~CloudDocs/Ongoing projects/Screenshots/`. Find the file there with a case-insensitive name match on the time in its name, then read it.
+
+## Browser vs Computer Use
+
+**For all browser-based work, use the Aside browser installed on this system (the `mcp__aside__*` tools), unless Sankalp says otherwise or the SOP in the relevant document names a different browser.**
+
+When performing web-based tasks (testing the app on localhost, checking a live site, or any browser workflow), **always use the Aside browser tools** (`mcp__aside__*`), never use computer-use tools for these. Computer-use is only appropriate for native desktop apps that have no browser equivalent.

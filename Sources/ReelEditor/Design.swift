@@ -443,7 +443,7 @@ struct StepperPill<Accessory: View>: View {
   var body: some View {
     HStack(spacing: 0) {
       Button(action: minus) { Icon("minus", size: 14).frame(width: 28, height: 28) }.buttonStyle(.plain)
-      HStack(spacing: 4) { Icon(icon, size: 14); Text(value).monospacedDigit() }
+      HStack(spacing: 4) { Icon(icon, size: 14); Text(value).monospacedDigit().lineLimit(1).fixedSize() }
         .font(.inter(13, .medium)).frame(minWidth: 52)
         .help(help)
       Button(action: plus) { Icon("plus", size: 14).frame(width: 28, height: 28) }.buttonStyle(.plain)

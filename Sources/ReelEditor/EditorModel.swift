@@ -377,6 +377,7 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
     if let r = selectedWords, selectionHasExtra { if let (a, b) = selectedWordRange { run("cut_range", ["start": .number(a), "end": .number(b)]) }; selectedWords = nil }
     else if let r = selectedWords { run("delete_words", ["indexes": .array(r.map { .number(Double($0)) })]); selectedWords = nil }
     else if let s = selection { run("cut_range", ["start": .number(s.s), "end": .number(s.e)]); selection = nil }
+    else if selectedCut != nil { restoreSelection() } // Delete on a selected cut takes the cut away (Sankalp, 6 Nov 2026)
   }
 
   func restoreSelection() {
@@ -385,6 +386,12 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
       if let (a, b) = selectedWordRange { run("restore_range", ["start": .number(a), "end": .number(b)]) }
       selectedWords = nil
     } else if let s = selection { run("restore_range", ["start": .number(s.s), "end": .number(s.e)]); selection = nil }
+    else if let c = selectedCut {
+      // A cut on the timeline can be words cut as well as a range, so both come back.
+      let cutWords = words.filter { w in w.cut && !w.extra && w.id < mainWordCount && (w.s ?? -1) >= c.s - 0.001 && (w.e ?? .infinity) <= c.e + 0.001 }.map(\.id)
+      if !cutWords.isEmpty { run("restore_words", ["indexes": .array(cutWords.map { .number(Double($0)) })]) }
+      run("restore_range", ["start": .number(c.s), "end": .number(c.e)]); selectedCut = nil
+    }
   }
 
   func splitAtPlayhead() { run("split_clip", ["at": .number(clock.time)]) }

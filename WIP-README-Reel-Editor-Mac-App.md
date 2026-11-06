@@ -179,6 +179,7 @@
 - [x] Where the reel was published (Sankalp, 5 Nov 2026) - `add_post_link` and `remove_post_link` keep the links of each post, LinkedIn, X, Instagram, YouTube and the rest, in the project file as posts, read from the link when the platform is not given; the Draft or Live menu lists them and opens each in the browser
 - [x] The chat's Claude talks to the other agents (Sankalp, 5 Nov 2026) - when the account has LiveAssistant, the chat starts with its `list_agents`, `list_accounts` and `send_to_agent`, and asks the ContentApp agent to find the reel's posts and record them itself with `add_post_link`, since a reply may not reach the chat
 - [x] Tokens while Claude works (Sankalp, 5 Nov 2026) - the chat's token count runs on during a turn, read every 5 seconds from the usage of each call Claude makes, and the turn's own total replaces it at the end
+- [x] A selected cut's menu and outline (Sankalp, 6 Nov 2026) - a selected cut has Uncut and Comment for Claude above it and Delete takes it away; its outline no longer drifts off the cut after a zoom, a scroll or a drag cut short, and follows the cut a resize made
 - [x] Picture lost at a speed other than 1x (Sankalp, 5 Nov 2026) - after the speed is laid over the reel its tracks end a nanosecond past the length the picture's instructions covered, and AVFoundation then drops the whole picture, leaving captions and sound over an empty frame; the instructions now cover the composition's own length
 
 ### Phase 12: Testing and Validation 🚧 IN PROGRESS
