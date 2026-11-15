@@ -126,6 +126,7 @@ struct CaptionOverlay: View {
 // step back, the big black play button, a step forward and the original length.
 struct PreviewPane: View {
   @ObservedObject var model: EditorModel
+  @ObservedObject private var app = AppModel.shared
 
   var body: some View {
     VStack(spacing: 0) {
@@ -136,7 +137,16 @@ struct PreviewPane: View {
           VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) { Icon("warning-circle", size: 16); Text(e).font(.inter(13)) }.foregroundStyle(Ink.red)
             if e.contains("not there") || e.contains("moved") {
-              Button { model.relink("main") } label: { IconLabel("Find the video", icon: "magnifying-glass", size: 14) }.pill(.primary, .sm)
+              HStack(spacing: 8) {
+                Button { model.relink("main") } label: { IconLabel("Find the video", icon: "magnifying-glass", size: 14) }.pill(.primary, .sm)
+                if app.searchMac {
+                  Button { model.askClaudeToFind() } label: { IconLabel("Ask Claude to find it", icon: "chat-circle-text", size: 14) }.pill(.secondary, .sm)
+                    .disabled(model.editingNow)
+                } else {
+                  Button { withAnimation(.cardOpen) { app.settingsOpen = true } } label: { IconLabel("Let Claude search this Mac", icon: "gear", size: 14) }.pill(.ghost, .sm)
+                    .help("Find missing videos in App settings lets Claude look for the files and link them again")
+                }
+              }
             }
           }
             .padding(16)

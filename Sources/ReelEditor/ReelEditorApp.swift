@@ -31,6 +31,9 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
   @Published var mcpOpen = ProcessInfo.processInfo.environment["REEL_EDITOR_MCP"] != nil
   // The App settings card under its button at the right of the top bar. REEL_EDITOR_APP_SETTINGS=1 opens it, for a snapshot.
   @Published var settingsOpen = ProcessInfo.processInfo.environment["REEL_EDITOR_APP_SETTINGS"] != nil
+  // Find missing videos in App settings: Claude may search this Mac for a project's missing files. Kept in settings.json,
+  // where reel-mcp reads it, and saved there when it changes.
+  @Published var searchMac = FindSource.allowed { didSet { if searchMac != oldValue { try? FindSource.setAllowed(searchMac); Log.write("app", "search_mac", extra: ["on": .bool(searchMac)]) } } }
   @Published var exportWidth: CGFloat = 0 // Export at the right end of the top bar, which App settings sits left of
   // The rule books modal, opened from the rule book count in the chat, and the book shown in it (nil is the first).
   // REEL_EDITOR_RULES=1 opens it at launch, for a snapshot.
@@ -898,6 +901,10 @@ struct AppSettingsPanel: View {
           }
           InsetCard(title: "Notifications", icon: "bell") {
             Toggle("When a transcription or an export ends, and when Claude finishes in the chat", isOn: $notifications).toggleStyle(.pillSwitch)
+          }
+          InsetCard(title: "Find missing videos", icon: "magnifying-glass") {
+            Toggle("Let Claude search this Mac for a project's videos when they are moved or renamed, and link them again", isOn: $app.searchMac).toggleStyle(.pillSwitch)
+            Note("Spotlight and your usual folders are searched by name and length. macOS may ask once for each folder, such as Downloads or Documents.")
           }
           InsetCard(title: "Agents (MCP)", icon: "plugs-connected") {
             Note("Claude or any MCP client edits the same projects through the editor's tools, and this window follows along live. To add the tools to Claude Code:")

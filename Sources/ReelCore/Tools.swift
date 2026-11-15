@@ -637,7 +637,7 @@ let coreTools: [ReelTool] = [
 
 // Every tool: the Mac app's own, the ones ported from the web editor (ToolsWeb.swift) and the web editor's names for the
 // Mac tools that do the same thing (list_reels, get_timeline, import_video).
-public let reelTools: [ReelTool] = { let base = coreTools + webTools + auditTools + focusTools + captionTools + ruleCheckTools; return base + webAliases(base) }()
+public let reelTools: [ReelTool] = { let base = coreTools + webTools + auditTools + focusTools + captionTools + ruleCheckTools + findTools; return base + webAliases(base) }()
 
 public let toolByName: [String: ReelTool] = Dictionary(uniqueKeysWithValues: reelTools.map { ($0.name, $0) })
 

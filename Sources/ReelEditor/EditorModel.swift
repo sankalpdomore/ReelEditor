@@ -436,6 +436,15 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
     if panel.runModal() == .OK, let u = panel.url { run("relink_source", ["source": .string(source), "path": .string(u.path)]) }
   }
 
+  // Asks the chat's Claude to find the project's missing files on this Mac and link them again (find_source), with
+  // leave from Find missing videos in App settings (Sankalp, 15 Nov 2026).
+  func askClaudeToFind() {
+    if UserDefaults.standard.string(forKey: "chatDock") == "side" { UserDefaults.standard.set(true, forKey: "chatSide") }
+    else if floating != .chat { toggle(.chat) }
+    let extra = "\n\nCall find_source with relink true. It links every file whose name and length match one file on this Mac. For any file it could not link, list its candidates in a few lines (where each one is, its length, when it changed) and ask Sankalp which one to link, then link his pick with relink_source path. If nothing was found, say which files and where they were, and ask him where they are now."
+    DirectChat.shared.send("My videos for this project are missing. Find them on this Mac and link them again.", context: AppModel.shared.screenContext(), extra: extra)
+  }
+
   // Lays a face video over the reel at the playhead, in a rounded window (add_face_overlay).
   func chooseFace() {
     let panel = NSOpenPanel()

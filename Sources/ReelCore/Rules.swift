@@ -50,6 +50,10 @@ public enum Rules {
     guard remember else { return }
     var s = settings()
     if let folder { s["rulesDir"] = folder.path } else { s["rulesDir"] = nil }
+    try saveSettings(s)
+  }
+
+  static func saveSettings(_ s: [String: Any]) throws {
     try FileManager.default.createDirectory(at: Store.root, withIntermediateDirectories: true)
     let d = try JSONSerialization.data(withJSONObject: s, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     try d.write(to: settingsURL, options: .atomic)

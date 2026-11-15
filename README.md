@@ -188,6 +188,8 @@ repo's `data/video-look-settings`); `reveal_in_finder` takes the export's path (
 `set_references` stores the links without adding the web editor's default rule books. `REEL_EDITOR_NO_OPEN=1` keeps the
 Finder and app opening tools from opening anything, for tests.
 
+Missing videos (Sankalp, 15 Nov 2026): when a project's video, added video or overlay was moved or renamed, `find_source` looks for it on this Mac, asking Spotlight for files of the same name and for videos of the same length within a tenth of a second (a renamed copy), and walking Downloads, Desktop, Movies, Documents, Pictures, iCloud Drive, the Trash and other disks by name. With `relink` true it links each file whose name and length match one file, or the newest of several copies of the same size, through `relink_source`'s own checks, and lists the candidates of the rest for Sankalp to pick. It searches the Mac only with his leave, Find missing videos in App settings, saved as `searchMac` in settings.json, which no tool can turn on; folders he names in the chat (`folders`) are searched without it. The missing video card in the preview has Ask Claude to find it when the setting is on, and Let Claude search this Mac, which opens App settings, when it is off. `REEL_FIND_ROOTS` replaces the walked folders and turns Spotlight off, for tests.
+
 A cut or word cut made through MCP waits for Sankalp's approval (`pending` on the cut, `pendingWords` on the EDL) until
 `approve_cuts`, unless the call passes `approved: true`; it plays and exports as a cut either way. A cut made in the app
 is approved at once.

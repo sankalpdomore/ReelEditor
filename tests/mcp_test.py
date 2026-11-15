@@ -15,7 +15,8 @@ os.makedirs(os.path.join(HOME, "_music"))
 shutil.copy(os.path.join(MEDIA, "music.m4a"), os.path.join(HOME, "_music", "bed.m4a"))
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env = dict(os.environ, REEL_EDITOR_HOME=HOME, REEL_EDITOR_NO_OPEN="1",
-           REEL_WHISPERX_SCRIPT=os.path.join(REPO, "Resources", "transcribe_whisperx.py"), REEL_AUDIT_SCRIPT=os.path.join(REPO, "Resources", "audit_audio.py"), REEL_NO_TRASH="1", REEL_NO_DECIPHER="1")
+           REEL_WHISPERX_SCRIPT=os.path.join(REPO, "Resources", "transcribe_whisperx.py"), REEL_AUDIT_SCRIPT=os.path.join(REPO, "Resources", "audit_audio.py"), REEL_NO_TRASH="1", REEL_NO_DECIPHER="1",
+           REEL_FIND_ROOTS=os.path.join(SCRATCH, "find-roots"))
 proc = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
 nid = 0
 results = []
@@ -476,6 +477,65 @@ bad("relink_source", {"project": B, "source": "main", "path": f"{MEDIA}/silent.m
 ok("relink_source", {"project": B, "source": "main", "path": f"{MEDIA}/blue.mp4"}, "relink main same file")
 bad("relink_source", {"project": B, "source": "s7", "path": f"{MEDIA}/blue.mp4"}, "not_found", "relink unknown source")
 bad("relink_source", {"project": B, "source": "main"}, "invalid_input", "relink with no path")
+
+# find_source: a missing video looked for on this Mac, only with leave from App settings (searchMac in settings.json),
+# and in folders named in the chat without it. REEL_FIND_ROOTS stands in for the home folders; Spotlight is off here.
+SETTINGS = os.path.join(HOME, "settings.json")
+def search_mac(on):
+    s = json.load(open(SETTINGS)) if os.path.exists(SETTINGS) else {}
+    s["searchMac"] = on
+    json.dump(s, open(SETTINGS, "w"))
+roots = os.path.join(SCRATCH, "find-roots")
+shutil.rmtree(roots, ignore_errors=True)
+shutil.rmtree(os.path.join(SCRATCH, "find-src"), ignore_errors=True)
+shutil.rmtree(os.path.join(SCRATCH, "find-named"), ignore_errors=True)
+os.makedirs(os.path.join(roots, "Downloads", "audit", "day 2"))
+os.makedirs(os.path.join(SCRATCH, "find-src"))
+F = "find-test"
+first = os.path.join(SCRATCH, "find-src", "IMG_9001.mp4")
+shutil.copy(f"{MEDIA}/blue.mp4", first)
+ok("create_project", {"path": first, "name": F, "transcribe": False}, "create find project")
+os.remove(first)
+bad("find_source", {"project": F}, "not_allowed", "find_source needs leave from App settings")
+r = ok("check_sources", {"project": F})
+check("the moved video is missing", r.get("missing") == 1, r)
+moved_to = os.path.join(roots, "Downloads", "audit", "day 2", "img_9001.MP4")
+shutil.copy(f"{MEDIA}/blue.mp4", moved_to)
+shutil.copy(f"{MEDIA}/silent.mp4", os.path.join(roots, "Downloads", "IMG_9001.mp4"))  # same name, another length
+search_mac(True)
+r = ok("find_source", {"project": F}, "find_source lists candidates")
+src = (r.get("sources") or [{}])[0]
+c = src.get("candidates") or []
+check("found by name in any case, length matching, best first", c and c[0]["path"] == moved_to and c[0]["nameMatches"] and c[0]["lengthMatches"], c)
+check("the same name of another length listed after it", len(c) == 2 and c[1]["nameMatches"] and not c[1]["lengthMatches"], c)
+check("listing links nothing", os.path.realpath(pj(F)["main"]["file"]) == os.path.realpath(first) and r.get("relinked") == 0 and r.get("missing") == 1, r)
+r = ok("find_source", {"project": F, "relink": True}, "find_source relinks a sure match")
+check("relinked to the match", r.get("relinked") == 1 and r["sources"][0].get("relinked") == moved_to and pj(F)["main"]["file"] == moved_to and r.get("missing") == 0, r)
+r = ok("find_source", {"project": F}, "find_source with nothing missing")
+check("nothing missing, nothing searched for", r.get("sources") == [] and r.get("missing") == 0, r)
+# Copies of one file: the newest is linked. A renamed copy in a folder named in the chat, found by its length alone, waits.
+os.remove(moved_to)
+older = os.path.join(roots, "Desktop", "IMG_9001.mp4")
+os.makedirs(os.path.dirname(older))
+shutil.copy(f"{MEDIA}/blue.mp4", older)
+os.utime(older, (time.time() - 3600, time.time() - 3600))
+newer = os.path.join(roots, "Downloads", "audit", "IMG_9001.mp4")
+shutil.copy(f"{MEDIA}/blue.mp4", newer)
+r = ok("find_source", {"project": F, "source": "main", "relink": True}, "find_source with two copies")
+check("the newest copy linked", r["sources"][0].get("relinked") == newer and len(r["sources"][0]["candidates"]) == 3, r)
+search_mac(False)
+named = os.path.join(SCRATCH, "find-named")
+os.makedirs(named)
+os.remove(newer)
+shutil.copy(f"{MEDIA}/blue.mp4", os.path.join(named, "renamed take.mp4"))
+r = ok("find_source", {"project": F, "folders": [named], "relink": True}, "find_source in a named folder without leave")
+s0 = (r.get("sources") or [{}])[0]
+check("a named folder alone is searched", [os.path.realpath(x) for x in r.get("searched", [])] == [os.path.realpath(named)], r)
+check("a renamed copy is found by its length and left for Sankalp", s0.get("candidates") and s0["candidates"][0]["lengthMatches"] and not s0["candidates"][0]["nameMatches"] and "relinked" not in s0 and "No sure match" in s0.get("note", ""), s0)
+check("the Desktop copy outside the named folder is not listed", not any(x["path"] == older for x in s0.get("candidates", [])), s0)
+ok("relink_source", {"project": F, "source": "main", "path": os.path.join(named, "renamed take.mp4")}, "relink the pick")
+bad("find_source", {"project": F, "folders": [os.path.join(SCRATCH, "no-such-folder")]}, "not_found", "find_source in a missing folder")
+bad("find_source", {"project": F, "source": "s9", "folders": [named]}, "not_found", "find_source of an unknown source")
 ok("open_project_folder", {"project": B})
 bad("reveal_in_finder", {"project": B, "file": "/etc/hosts"}, "invalid_path", "reveal outside the project")
 
