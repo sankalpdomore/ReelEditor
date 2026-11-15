@@ -21,7 +21,11 @@ enum NamePrompt: Identifiable, Equatable {
 
 // A word of the transcript. Words of the project's own video keep their index as id; words of the other videos come after
 // them (extra), cut and restored by their times. pending: cut from the chat, waiting for approval.
-struct WordView: Identifiable { let id: Int; let text: String; let s: Double?; let e: Double?; let cut: Bool; var pending = false; var extra = false }
+struct WordView: Identifiable { let id: Int; let text: String; let s: Double?; let e: Double?; let cut: Bool; var pending = false; var extra = false
+  var caption: String? = nil // what the captions say over this word instead, from a caption rewrite (edit_caption)
+  var captionId: String? = nil // that rewrite's id
+  var captionEnd = false // the last word of the rewrite in its paragraph, where the transcript shows the caption's words
+}
 // A paragraph of the transcript, in the order the reel plays: a section heading when one starts there, its words, and the
 // clip and video it belongs to; clipStart marks the first paragraph of a clip, where its header goes.
 struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [Int]; var clip = ""; var source = MAIN; var label = ""; var clipStart = false }
@@ -190,6 +194,19 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
       }
       if !ids.isEmpty || p.words.isEmpty { paras.append(Paragraph(id: paras.count, title: p.title, words: ids, clip: p.clip, source: p.source, label: p.label, clipStart: p.clipStart)) }
     }
+    // The caption rewrites over each word, by the word's middle, as the captions lay them in.
+    if let rw = edl.captionRewrites, !rw.isEmpty {
+      for k in all.indices {
+        guard let s = all[k].s, let e = all[k].e else { continue }
+        let m = (s + e) / 2
+        if let r = rw.first(where: { m >= $0.start && m < $0.end }) { all[k].caption = r.text; all[k].captionId = r.id }
+      }
+      for p in paras {
+        for (k, id) in p.words.enumerated() where all[id].captionId != nil {
+          if k == p.words.count - 1 || all[p.words[k + 1]].captionId != all[id].captionId { all[id].captionEnd = true }
+        }
+      }
+    }
     words = all
     let frame = exportSize
     captionStyle = Captions.style(edl, landscape: frame.width > frame.height)
@@ -208,6 +225,7 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
       if let id = selectedAnimation, !loaded.animations.animations.contains(where: { $0.id == id }) { selectedAnimation = nil }
       await rebuild()
       Task { await loadOverlayPeaks() }
+      Task { await warmVoice() }
     } catch { self.error = String(describing: error) }
   }
 
@@ -289,7 +307,19 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
     }
   }
 
+  // Each video's voice levels, read off the main thread the first time a file is in the project, then the captions drawn
+  // again fitted to them (Voice.swift).
+  private var voiceRead = Set<String>()
+  private func warmVoice() async {
+    let files = Voice.files(loaded).filter { !voiceRead.contains($0) }
+    guard !files.isEmpty else { return }
+    voiceRead.formUnion(files)
+    await Task.detached(priority: .utility) { Voice.warm(files) }.value
+    derive()
+  }
+
   private func loadMedia() async {
+    await warmVoice()
     let sources = [loaded.project.main] + loaded.project.edits.sources
     for s in sources where peaks[s.id] == nil {
       let cache = Store.dir(name).appendingPathComponent("media/peaks-\(s.id).json")

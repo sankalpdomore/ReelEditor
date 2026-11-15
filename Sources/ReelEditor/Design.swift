@@ -565,16 +565,17 @@ struct ValueSlider: View {
 }
 
 // The menu that floats at a selection, the web reel-selection-menu: a white pill with a soft shadow holding Cut, Uncut,
-// Correct and Comment for Claude. Correct turns it into a field with the selected words to retype; Comment turns it into
-// a comment box whose text is left on the selection (add_comment) and sent to the chat's Claude at once.
+// Edit caption and Comment for Claude. Edit caption turns it into a field with what the captions say there, to retype in
+// any number of words while the sound stays as it is (Sankalp, 15 Nov 2026); Comment turns it into a comment box whose
+// text is left on the selection (add_comment) and sent to the chat's Claude at once.
 struct SelectionMenu: View {
   enum Mode { case buttons, correct, comment }
   var canCut = true
   var canUncut = false
-  var words: String? = nil // the selected words, when they can be corrected
+  var words: String? = nil // what the captions say over the selection, when they can be edited
   let cut: () -> Void
   let uncut: () -> Void
-  var correct: (String) -> String? = { _ in nil } // the error to show, or nil when it was saved
+  var correct: (String) -> String? = { _ in nil } // the new caption; returns the error to show, or nil when it was saved
   let comment: (String) -> Void
   @State private var mode = Mode.buttons
   @State private var text = ""
@@ -588,7 +589,8 @@ struct SelectionMenu: View {
         HStack(spacing: 4) {
           if canCut { Button(action: cut) { IconLabel("Cut", icon: "scissors", size: 14) }.pill(.outline, .sm) }
           if canUncut { Button(action: uncut) { IconLabel("Uncut", icon: "arrow-counter-clockwise", size: 14) }.pill(.outline, .sm) }
-          if let words { Button { text = words; problem = nil; mode = .correct } label: { IconLabel("Correct", icon: "pencil-simple", size: 14) }.pill(.outline, .sm) }
+          if let words { Button { text = words; problem = nil; mode = .correct } label: { IconLabel("Edit caption", icon: "pencil-simple", size: 14) }.pill(.outline, .sm)
+            .help("Change what the captions say here: fix, merge or rephrase the words. The sound stays as it is") }
           Button { text = ""; mode = .comment } label: { IconLabel("Comment for Claude", icon: "chat-text", size: 14) }.pill(.outline, .sm)
         }
         .padding(4)
@@ -597,7 +599,7 @@ struct SelectionMenu: View {
       case .correct:
         VStack(alignment: .leading, spacing: 8) {
           HStack(spacing: 4) {
-            TextField("Corrected words", text: $text).textFieldStyle(.field).frame(width: 260).focused($typing)
+            TextField("What the captions say here", text: $text).textFieldStyle(.field).frame(width: 300).focused($typing)
               .onSubmit { save() }.onExitCommand { mode = .buttons }
             Button("Cancel") { mode = .buttons }.pill(.ghost, .sm)
             Button("Save") { save() }.pill(.primary, .sm)

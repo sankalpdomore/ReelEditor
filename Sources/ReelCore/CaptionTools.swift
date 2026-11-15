@@ -53,6 +53,28 @@ func styled(_ own: TextStyle?, _ i: JSON, reset: Bool) throws -> TextStyle? {
 
 func hideList(_ hides: [CaptionHide]) -> JSON { .array(hides.map { ["id": .string($0.id), "start": .number(round3($0.start)), "end": .number(round3($0.end))] }) }
 
+// The caption lines as they are shown, in edit seconds: the text and when it is on screen.
+func captionLines(_ l: Loaded) -> JSON {
+  let plan = l.plan, speed = l.project.edits.export.speed ?? 1
+  let frame = landscape(l) ? CGSize(width: 1920, height: 1080) : CGSize(width: 1080, height: 1920)
+  let style = Captions.style(l.project.edits, landscape: landscape(l))
+  return .array(Captions.lines(l, plan, speed: speed, style: style, frame: frame).map { line in
+    ["text": .string(line.words.map(\.w).joined(separator: " ")), "start": .number(round3(editOf(plan, line.s * speed))), "end": .number(round3(editOf(plan, line.e * speed)))]
+  })
+}
+
+func rewriteList(_ list: [CaptionRewrite]) -> JSON {
+  .array(list.map { ["id": .string($0.id), "start": .number(round3($0.start)), "end": .number(round3($0.end)), "text": .string($0.text)] })
+}
+
+// The words the captions would show over a stretch with no rewrite there: the spoken words, kept and corrected.
+func heardWords(_ e: Edl, _ main: EdlMain, _ extra: ExtraWords, _ r: Range) -> [Word] {
+  var bare = e; bare.captionRewrites = nil
+  let plan = buildPlan(bare, main)
+  let a = outputOf(plan, r.s), b = outputOf(plan, r.e)
+  return outputWords(plan, bare, main.words, extra).filter { let m = ($0.s + $0.e) / 2; return m >= a && m < b }
+}
+
 // The stretches merged where they meet or overlap, in order, each keeping the first id among those merged.
 func mergedHides(_ list: [CaptionHide]) -> [CaptionHide] {
   var out: [CaptionHide] = []
@@ -99,12 +121,18 @@ let motionFields: [String: JSON] = [
 ]
 
 let captionTools: [ReelTool] = [
-  ReelTool(name: "get_caption_style", description: "The captions' look on this project: style (what they are drawn in now: the built in reel look, then the default saved for new projects, then the project's own), own (the fields the project sets itself), savedDefault, burnIn (whether they are burned into the export), the stretches they are hidden over (hides, edit seconds) and whether the frame is landscape. Sizes and places are px of the 1080 by 1920 frame (1920 by 1080 landscape).", inputSchema: obj(["project": projectArg], ["project"])) { i in
+  ReelTool(name: "get_caption_style", description: "The captions' look on this project: style (what they are drawn in now: the built in reel look, then the default saved for new projects, then the project's own), own (the fields the project sets itself), savedDefault, burnIn (whether they are burned into the export), the stretches they are hidden over (hides, edit seconds), the stretches edit_caption made say other words (rewrites, with the words heard there) and whether the frame is landscape. Sizes and places are px of the 1080 by 1920 frame (1920 by 1080 landscape). lines true also lists every caption line as it is shown, its text and when it is on screen in edit seconds, each word fitted to where its voice is heard.", inputSchema: obj(["project": projectArg, "lines": ["type": "boolean", "description": "True lists the caption lines with their times."]], ["project"])) { i in
     let l = try Store.load(try name(i))
     let land = landscape(l), e = l.project.edits
-    return ["project": .string(l.project.name), "landscape": .bool(land), "style": JSON.from(Captions.style(e, landscape: land)), "own": e.captionStyle.map { JSON.from($0) } ?? .null,
+    let rewrites: [JSON] = (e.captionRewrites ?? []).map { r in
+      let heard = heardWords(e, l.main, l.extra, Range(s: r.start, e: r.end)).map(\.w).joined(separator: " ")
+      return ["id": .string(r.id), "start": .number(round3(r.start)), "end": .number(round3(r.end)), "text": .string(r.text), "heard": .string(heard)]
+    }
+    var out: [String: JSON] = ["project": .string(l.project.name), "landscape": .bool(land), "style": JSON.from(Captions.style(e, landscape: land)), "own": e.captionStyle.map { JSON.from($0) } ?? .null,
             "savedDefault": Captions.savedDefault(landscape: land).map { JSON.from($0) } ?? .null, "burnIn": .bool(exportFlags(e, hasWords: l.hasAnyWords).captions),
-            "hides": hideList(e.captionHides ?? [])]
+            "hides": hideList(e.captionHides ?? []), "rewrites": .array(rewrites)]
+    if i["lines"]?.bool == true { out["lines"] = captionLines(l) }
+    return .object(out)
   },
   ReelTool(name: "set_caption_style", description: "Styles this project's captions: any of the fields below changes (the font and its weight, italic, size, letter spacing and case; the colour, outline and shadow; a box behind the line or behind the word being spoken, its colour, opacity, padding and corners; the highlight colour of the spoken word; how a line comes in; where the captions sit, the widest line and the most words a line). Fields left out stay as they are; clear puts fields back to the default, reset true puts them all back. burnIn turns the burned in captions on or off. saveAsDefault true makes this look the one new projects start with, resetDefault true clears that. Shown in the preview and the export at once. One undo step.", inputSchema: obj(styleFields.merging(captionOnlyFields) { a, _ in a }.merging([
     "project": projectArg, "clear": clearField, "reset": ["type": "boolean"], "burnIn": ["type": "boolean"], "saveAsDefault": ["type": "boolean"],
@@ -163,6 +191,47 @@ let captionTools: [ReelTool] = [
       }
       e.captionHides = list.isEmpty ? nil : mergedHides(list)
       return ["hides": hideList(e.captionHides ?? [])]
+    }
+  },
+  ReelTool(name: "edit_caption", description: "Changes what the captions say over a stretch of the reel, the sound untouched: to merge words (two words heard, one shown), rephrase them or fix them in an added clip or a voice over. Give the stretch (start and end in edit seconds, from and to as word indexes of the project's own video, or a clip) and text, what the captions say there instead of the words spoken. The same number of words keep the spoken words' times; another number share the stretch. A rewrite the stretch overlaps is replaced. text null or empty takes the rewrites the stretch overlaps away; id with text changes that rewrite, id alone takes it away. The transcript keeps the spoken words; get_caption_style lists the rewrites with the words heard under each. For one word spelled wrong in the project's own video, correct_word does it word by word. One undo step.", inputSchema: obj(stretchFields.merging([
+    "project": projectArg, "text": ["type": ["string", "null"], "maxLength": 300, "description": "What the captions say over the stretch."],
+    "id": ["type": "string", "pattern": "^r[0-9]{1,4}$", "description": "A rewrite to change or take away."],
+  ]) { a, _ in a }, ["project"])) { i in
+    let extra = try Store.load(try name(i)).extra
+    return try edit(i, "edit_caption") { e, _, main in
+      var list = e.captionRewrites ?? []
+      let text = (i["text"]?.string ?? "").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+      if let id = i["id"]?.string {
+        guard let k = list.firstIndex(where: { $0.id == id }) else { throw ToolError("not_found", "No caption rewrite \(id). Rewrites: \(list.map(\.id).joined(separator: ", "))") }
+        if text.isEmpty { list.remove(at: k) } else { list[k].text = text }
+        e.captionRewrites = list.isEmpty ? nil : list
+        return ["rewrites": rewriteList(list)]
+      }
+      let r = try stretch(i, e, main)
+      let overlaps = { (x: CaptionRewrite) in x.start < r.e - 0.001 && x.end > r.s + 0.001 }
+      let replaced = list.filter(overlaps).map(\.id)
+      list.removeAll(where: overlaps)
+      if text.isEmpty {
+        guard !replaced.isEmpty else { throw ToolError("not_found", "No caption rewrite over \(round3(r.s)) to \(round3(r.e)) s to take away") }
+        e.captionRewrites = list.isEmpty ? nil : list
+        return ["removed": .array(replaced.map { .string($0) }), "rewrites": rewriteList(list)]
+      }
+      let heard = heardWords(e, main, extra, r)
+      guard !heard.isEmpty else { throw ToolError("invalid_input", "No caption words between \(round3(r.s)) and \(round3(r.e)) s: the words there are cut or hidden in a muted clip, or nothing is said") }
+      let ids = Set(list.map(\.id))
+      var k = 1; while ids.contains("r\(k)") { k += 1 }
+      list.append(CaptionRewrite(id: "r\(k)", start: round3(r.s), end: round3(r.e), text: text))
+      list.sort { $0.start < $1.start }
+      e.captionRewrites = list
+      // The caption words over the stretch now, in edit seconds, so the caller sees how the new words are timed.
+      let plan = buildPlan(e, main)
+      let a = outputOf(plan, r.s), b = outputOf(plan, r.e)
+      let shown = outputWords(plan, e, main.words, extra).filter { let m = ($0.s + $0.e) / 2; return m >= a && m < b }
+      var out: [String: JSON] = ["rewrite": .string("r\(k)"), "start": .number(round3(r.s)), "end": .number(round3(r.e)), "text": .string(text),
+                                 "heard": .string(heard.map(\.w).joined(separator: " ")), "rewrites": rewriteList(list),
+                                 "captionWords": .array(shown.map { ["w": .string($0.w), "start": .number(round3(editOf(plan, $0.s))), "end": .number(round3(editOf(plan, $0.e)))] })]
+      if !replaced.isEmpty { out["replaced"] = .array(replaced.map { .string($0) }) }
+      return out
     }
   },
   ReelTool(name: "add_text_layer", description: "Adds a text layer to the Animation layer: text (its words, on more than one line too) from start to end in edit seconds, or over the whole reel with whole true, in its own style (the same fields as set_caption_style: font, weight, size, colour, outline, shadow, box, x and y, widest line, alignment), coming in with enter and going out with exit. Shown in the preview and burned into the export under the captions. Returns its id; update_text_layer changes it and remove_animation takes it away. One undo step.", inputSchema: obj(styleFields.merging(motionFields) { a, _ in a }.merging([

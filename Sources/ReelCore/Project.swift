@@ -29,7 +29,7 @@ public struct Snapshot: Codable, Equatable, Sendable {
   public var audioOverlays: [AudioOverlay]? = nil // nil in a step written before overlays existed: they are left as they are
   public var captions: CaptionsSnap? = nil // the caption style and hidden stretches; nil in a step written before 2 Nov 2026
 }
-public struct CaptionsSnap: Codable, Equatable, Sendable { public var style: TextStyle?; public var hides: [CaptionHide]? }
+public struct CaptionsSnap: Codable, Equatable, Sendable { public var style: TextStyle?; public var hides: [CaptionHide]?; public var rewrites: [CaptionRewrite]? = nil }
 public struct HistoryStep: Codable, Sendable { public var label: String; public var snap: Snapshot }
 public struct History: Codable, Sendable { public var past: [HistoryStep] = []; public var future: [HistoryStep] = [] }
 
@@ -387,7 +387,7 @@ public enum Store {
 
   static func snapshot(_ p: Project, _ a: AnimationFile) -> Snapshot {
     Snapshot(clips: p.edits.clips, sources: p.edits.sources, cuts: p.edits.cuts, deleted: p.edits.deleted, corrections: p.edits.corrections, animations: a.animations, audioOverlays: p.edits.audioOverlays ?? [],
-             captions: CaptionsSnap(style: p.edits.captionStyle, hides: p.edits.captionHides))
+             captions: CaptionsSnap(style: p.edits.captionStyle, hides: p.edits.captionHides, rewrites: p.edits.captionRewrites))
   }
 
   // Reads the project, lets the edit change its EDL and its animations, and saves what changed. An edit that changes the
@@ -432,7 +432,7 @@ public enum Store {
       p.edits.clips = step.snap.clips; p.edits.sources = step.snap.sources; p.edits.cuts = step.snap.cuts
       p.edits.deleted = step.snap.deleted; p.edits.corrections = step.snap.corrections
       if let o = step.snap.audioOverlays { p.edits.audioOverlays = o.isEmpty ? nil : o }
-      if let c = step.snap.captions { p.edits.captionStyle = c.style; p.edits.captionHides = c.hides }
+      if let c = step.snap.captions { p.edits.captionStyle = c.style; p.edits.captionHides = c.hides; p.edits.captionRewrites = c.rewrites }
       p.edits = canonical(p.edits, l.main)
       a.animations = step.snap.animations
       if p != l.project { p.rev += 1; try write(p, file(name, "project.json")) }

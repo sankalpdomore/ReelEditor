@@ -114,6 +114,7 @@ public struct Edl: Codable, Equatable, Sendable {
   public var captionPos: CaptionPos? = nil // where this reel's captions sat before caption styles; captionStyle's x and y now
   public var captionStyle: TextStyle? = nil // the captions' own look, laid over the default (Captions.swift); part of undo
   public var captionHides: [CaptionHide]? = nil // stretches with no captions, edit seconds; part of undo
+  public var captionRewrites: [CaptionRewrite]? = nil // stretches whose captions say other words, the sound untouched; part of undo
   public var caption: String? = nil // the caption to post with the reel
   public var status: String? = nil // draft (nil) or live
   public var posts: [ReelPost]? = nil // where the reel was published: a link per post (add_post_link)
@@ -359,6 +360,33 @@ public func outputWords(_ plan: Plan, _ edl: Edl, _ words: [Word], _ extra: Extr
       out.append(Word(w: ew.w, s: outputOf(plan, ew.s), e: outputOf(plan, ew.e)))
     }
     out.sort { $0.s < $1.s }
+  }
+  return rewritten(out, plan, edl)
+}
+
+// The caption words with each caption rewrite laid in (edit_caption, Sankalp, 15 Nov 2026): the words whose middle is
+// inside its stretch give way to its text. The same number of words keep the spoken words' times; another number share
+// the time from the first word's start to the last one's end, each by its length. The sound is not touched.
+func rewritten(_ words: [Word], _ plan: Plan, _ edl: Edl) -> [Word] {
+  guard let list = edl.captionRewrites, !list.isEmpty else { return words }
+  var out = words
+  for r in list.sorted(by: { $0.start < $1.start }) {
+    let a = outputOf(plan, r.start), b = outputOf(plan, r.end)
+    let inside = out.indices.filter { let m = (out[$0].s + out[$0].e) / 2; return m >= a && m < b }
+    guard let f = inside.first, let l = inside.last else { continue }
+    let tokens = r.text.split(whereSeparator: \.isWhitespace).map(String.init)
+    var new: [Word] = []
+    if tokens.count == inside.count {
+      new = zip(tokens, inside).map { Word(w: $0, s: out[$1].s, e: out[$1].e) }
+    } else {
+      let s = out[f].s, e = out[l].e
+      let total = Double(tokens.reduce(0) { $0 + max(1, $1.count) })
+      var t = s
+      for tok in tokens { let d = (e - s) * Double(max(1, tok.count)) / max(1, total); new.append(Word(w: tok, s: t, e: t + d)); t += d }
+    }
+    let gone = Set(inside)
+    out = out.enumerated().filter { !gone.contains($0.offset) }.map(\.element)
+    out.insert(contentsOf: new, at: f)
   }
   return out
 }

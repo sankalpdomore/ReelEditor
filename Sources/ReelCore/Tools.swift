@@ -101,7 +101,7 @@ public enum ReelState {
       "pendingWords": JSON.from(edl.pendingWords ?? []), "waitingCuts": .number(Double(edl.cuts.filter { $0.pending == true }.count + (edl.pendingWords?.count ?? 0))),
       "look": edl.look.map { JSON.from($0) } ?? .null, "music": edl.music.map { JSON.from($0) } ?? .null, "musicFile": Compose.musicFile(edl).map { .string($0.path) } ?? .null,
       "voiceGain": .number(edl.voiceGain ?? 1), "voiceEq": edl.voiceEq.map { JSON.from($0) } ?? .null, "captionPos": edl.captionPos.map { JSON.from($0) } ?? .null,
-      "captionStyle": edl.captionStyle.map { JSON.from($0) } ?? .null, "captionHides": hideList(edl.captionHides ?? []),
+      "captionStyle": edl.captionStyle.map { JSON.from($0) } ?? .null, "captionHides": hideList(edl.captionHides ?? []), "captionRewrites": rewriteList(edl.captionRewrites ?? []),
       "caption": edl.caption.map { .string($0) } ?? .null, "status": .string(edl.status ?? "draft"), "posts": JSON.from(edl.posts ?? []), "references": JSON.from(edl.references ?? []), "cost": edl.cost.map { JSON.from($0) } ?? .null,
       "titleHides": .array(clipTitleHides(plan).map(r)), "comments": .number(Double(Comments.read(l.project.name).filter { $0.status == "unresolved" }.count)),
       "draft": .bool(Drafts.read(l.project.name) != nil),

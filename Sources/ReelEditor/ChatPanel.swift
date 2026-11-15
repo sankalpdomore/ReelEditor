@@ -376,7 +376,7 @@ struct ChatItemRow: View {
     case "list_comments", "add_comment", "resolve_comment": return "chat-text"
     case "approve_cuts": return "check-circle"
     case "set_focus": return "crosshair"
-    case "correct_word": return "pencil-simple"
+    case "correct_word", "edit_caption": return "pencil-simple"
     case "add_animation", "update_animation", "remove_animation", "set_animations": return "magic-wand"
     case "open_in_app", "get_app_state": return "app-window"
     default: return "wrench"

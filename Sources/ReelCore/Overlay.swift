@@ -71,7 +71,8 @@ public enum Overlay {
 
   // The words that stay, in groups of up to three, broken at a pause or the end of a sentence. Output seconds after speed.
   public static func captionGroups(_ l: Loaded, _ plan: Plan, speed: Double) -> [CaptionGroup] {
-    let words = outputWords(plan, l.project.edits, l.words, l.extra)
+    let heard = Voice.captionWords(l)
+    let words = outputWords(plan, l.project.edits, heard.words, heard.extra)
     var groups: [CaptionGroup] = []
     var cur: [Word] = []
     func flush() { if let f = cur.first, let z = cur.last { groups.append(CaptionGroup(s: f.s / speed, e: z.e / speed, text: cur.map(\.w).joined(separator: " "))) }; cur = [] }

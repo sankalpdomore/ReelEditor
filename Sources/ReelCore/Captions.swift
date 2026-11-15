@@ -7,7 +7,8 @@
 //
 // The captions take the project's own style (captionStyle in its file) over the default for new projects (settings.json)
 // over the built in look, the web editor's: Advercase Bold 95 px in white with a black outline, the spoken word in a black
-// box, three words a line at 1490 px down. They can be hidden over stretches of the reel (captionHides, edit seconds).
+// box, three words a line at 1490 px down. They can be hidden over stretches of the reel (captionHides, edit seconds),
+// and a stretch can say other words than were spoken there (captionRewrites), the sound untouched.
 // A text layer is an animation of kind text on the Animation layer: its own words in the same style, at its own place,
 // for a part of the reel or all of it, coming in and going out with a motion of its own.
 //
@@ -85,6 +86,15 @@ public struct CaptionHide: Codable, Equatable, Sendable {
   public var start: Double
   public var end: Double
   public init(id: String, start: Double, end: Double) { self.id = id; self.start = start; self.end = end }
+}
+
+// A stretch of the reel whose captions say `text` in place of the words spoken there, in edit seconds (edit_caption).
+public struct CaptionRewrite: Codable, Equatable, Sendable {
+  public var id: String
+  public var start: Double
+  public var end: Double
+  public var text: String
+  public init(id: String, start: Double, end: Double, text: String) { self.id = id; self.start = start; self.end = end; self.text = text }
 }
 
 public enum Captions {
@@ -206,7 +216,7 @@ public enum Captions {
     (edl.captionHides ?? []).map { Range(s: outputOf(plan, $0.start) / speed, e: outputOf(plan, $0.end) / speed) }.filter { $0.e > $0.s + 0.001 }
   }
 
-  // The words that stay, outside the hidden stretches, in lines: a line ends after a pause of half a second, at the end
+  // The words that stay, outside the hidden stretches and fitted to the voice, in lines: a line ends after a pause of half a second, at the end
   // of a sentence or a comma, at the style's word limit, or before it would run wider than its widest line. A line stays
   // up until the next one when the gap is short. Output seconds after speed.
   public static func lines(_ l: Loaded, _ plan: Plan, speed: Double, style s: TextStyle, frame: CGSize) -> [Line] {
@@ -218,7 +228,9 @@ public enum Captions {
     var out: [Line] = []
     var cur: [LineWord] = [], width: CGFloat = 0, segment = -1
     func flush() { if let f = cur.first, let z = cur.last { out.append(Line(s: f.s, e: z.e, words: cur)) }; cur = []; width = 0 }
-    for w in outputWords(plan, l.project.edits, l.words, l.extra) {
+    // Each word fitted to where its voice is, so a caption shows only while it is heard (Voice.swift).
+    let heard = Voice.captionWords(l)
+    for w in outputWords(plan, l.project.edits, heard.words, heard.extra) {
       let ws = w.s / speed, we = w.e / speed, mid = (ws + we) / 2
       if hides.contains(where: { mid >= $0.s && mid < $0.e }) { continue }
       let seg = hides.filter { $0.e <= mid }.count
@@ -386,6 +398,7 @@ public enum Captions {
 
   // The captions as layers on the layer timeline, one per line, or one per spoken word for a word box or highlight.
   public static func layers(_ l: Loaded, _ plan: Plan, speed: Double, duration: Double, frame: CGSize, scale: CGFloat) -> [CALayer] {
+    Voice.warm(Voice.files(l)) // the export reads every video's voice levels first, in the app too
     let s = style(l.project.edits, landscape: frame.width > frame.height)
     let at = center(s, frame: frame)
     let k = unit(frame)

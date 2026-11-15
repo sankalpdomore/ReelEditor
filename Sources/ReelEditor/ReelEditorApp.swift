@@ -73,6 +73,7 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
   // project made later by an agent still opens in a tab of its own.
   static let tabsKey = "openTabs"
   init() {
+    Voice.onDemand = false // the editors read the voice levels in the background (EditorModel.warmVoice)
     let names = Store.names()
     known = Set(names)
     projects = names

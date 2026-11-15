@@ -189,9 +189,9 @@ extension TranscriptView {
       let below = first.minY < 56
       let y = below ? (frames.rects[r.upperBound]?.maxY ?? first.maxY) + 8 : first.minY - 52
       let extra = model.selectionHasExtra
-      SelectionMenu(canCut: sel.contains { !$0.cut }, canUncut: sel.contains { $0.cut }, words: extra ? nil : sel.map(\.text).joined(separator: " "),
+      SelectionMenu(canCut: sel.contains { !$0.cut }, canUncut: sel.contains { $0.cut }, words: shownCaption(r),
         cut: { model.cutSelection() }, uncut: { model.restoreSelection() },
-        correct: { text in correct(r, text) },
+        correct: { text in editCaption(r, text) },
         comment: { t in
           // Saved on the reel, and sent to the chat's Claude at once (Sankalp, 2 Nov 2026).
           let on = "\"\(sel.map(\.text).joined(separator: " "))\" (words \(r.lowerBound) to \(r.upperBound), at \(timecode(sel.first?.s ?? 0).components(separatedBy: ".")[0]))"
@@ -207,13 +207,40 @@ extension TranscriptView {
     }
   }
 
-  // One word typed for each word selected, as the web editor asks; each changed word goes through correct_word.
-  func correct(_ r: ClosedRange<Int>, _ text: String) -> String? {
-    let next = text.split(whereSeparator: \.isWhitespace).map(String.init)
-    guard next.count == r.count else { return "Type \(r.count) \(r.count == 1 ? "word" : "words"), one for each word selected" }
-    for (k, i) in r.enumerated() where next[k] != model.words[i].text {
-      model.run("correct_word", ["index": .number(Double(i)), "text": .string(next[k])])
+  // The caption rewrites over the selected words (edit_caption).
+  func rewrites(over r: ClosedRange<Int>) -> [CaptionRewrite] {
+    guard let (a, b) = model.selectedWordRange else { return [] }
+    return (model.loaded.project.edits.captionRewrites ?? []).filter { $0.start < b - 0.001 && $0.end > a + 0.001 }
+  }
+
+  // What the captions say over the selection now: the one rewrite there, or the words heard.
+  func shownCaption(_ r: ClosedRange<Int>) -> String {
+    let over = rewrites(over: r)
+    return over.count == 1 ? over[0].text : model.words[r].map(\.text).joined(separator: " ")
+  }
+
+  // Edit caption (Sankalp, 15 Nov 2026): what the captions say over the selection, the sound untouched. One word for each
+  // word of the project's own video goes word by word through correct_word, as before, so the transcript shows the fix;
+  // any other number of words, or words of an added clip, is a caption rewrite over the selection's time (edit_caption).
+  // An empty field, or the words heard typed back, takes the rewrites there away.
+  func editCaption(_ r: ClosedRange<Int>, _ text: String) -> String? {
+    let typed = text.split(whereSeparator: \.isWhitespace).map(String.init)
+    let heard = model.words[r].map(\.text)
+    let over = rewrites(over: r)
+    guard let (a, b) = model.selectedWordRange else { return "These words are not in the reel" }
+    let span: [String: JSON] = ["start": .number(round3(a)), "end": .number(round3(b))]
+    if typed.isEmpty || (typed == heard && !over.isEmpty) {
+      guard !over.isEmpty else { return "Type what the captions should say here" }
+      model.run("edit_caption", span.merging(["text": .null]) { x, _ in x })
+      return nil
     }
+    if !model.selectionHasExtra && over.isEmpty && typed.count == r.count {
+      for (k, i) in r.enumerated() where typed[k] != model.words[i].text {
+        model.run("correct_word", ["index": .number(Double(i)), "text": .string(typed[k])])
+      }
+      return nil
+    }
+    model.run("edit_caption", span.merging(["text": .string(typed.joined(separator: " "))]) { x, _ in x })
     return nil
   }
 }
@@ -253,7 +280,11 @@ struct TranscriptParagraph: View {
             .font(.inter(14)).foregroundStyle(Ink.faint)
         } else {
           FlowLayout(spacing: TRANSCRIPT_WORD_GAP, lineSpacing: TRANSCRIPT_LINE_GAP) {
-            ForEach(model.wordsOf(p)) { w in WordChip(model: model, w: w, frames: frames) }
+            ForEach(model.wordsOf(p)) { w in
+              WordChip(model: model, w: w, frames: frames)
+              // What the captions say over the words before it, after the last of them (Edit caption, Sankalp, 15 Nov 2026).
+              if w.captionEnd, let text = w.caption, !w.cut { CaptionTag(model: model, text: text, words: model.wordsOf(p).filter { $0.captionId == w.captionId }.map(\.id)) }
+            }
           }
           .shimmer(shimmer)
         }
@@ -289,10 +320,12 @@ struct WordChip: View {
       // A cut word keeps its red or amber strike but is faded, with no box behind it, so the kept words are what reads
       // (Sankalp, 4 Nov 2026).
       .strikethrough(w.cut, color: (w.pending ? Ink.amber : Ink.red).opacity(0.5))
-      .foregroundStyle(current ? Ink.onPrimary : w.pending ? Ink.amber.opacity(0.45) : w.cut ? Ink.ghost.opacity(0.7) : Ink.text)
+      // A word the captions say otherwise (Edit caption) is underlined with blue dots.
+      .underline(w.caption != nil && !w.cut, pattern: .dot, color: Ink.focus)
+      .foregroundStyle(current ? Ink.onPrimary : w.pending ? Ink.amber.opacity(0.45) : w.cut ? Ink.ghost.opacity(0.7) : w.caption != nil ? Ink.faint : Ink.text)
       .padding(.horizontal, TRANSCRIPT_WORD_PAD)
       .background(RoundedRectangle(cornerRadius: 4).fill(selected ? Ink.select : current ? Ink.strong : hover ? Ink.sunken : .clear))
-      .help(w.pending ? "Cut from the chat, waiting for your approval" : "")
+      .help(w.pending ? "Cut from the chat, waiting for your approval" : w.caption.map { "The captions say \"\($0)\" here, the sound is untouched. Select the words and Edit caption to change it" } ?? "")
       .onHover { hover = $0 }
       .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("words")) }) { [frames, id = w.id] r in frames.rects[id] = r }
       .onTapGesture {
@@ -306,6 +339,34 @@ struct WordChip: View {
         }
         model.selection = nil
       }
+  }
+}
+
+// The words the captions say in place of the spoken words before it, a caption rewrite (edit_caption): in blue after the
+// last of them, with a pencil. A click selects those words, so Edit caption in the menu changes or takes it away.
+struct CaptionTag: View {
+  @ObservedObject var model: EditorModel
+  let text: String
+  let words: [Int]
+  @State private var hover = false
+
+  var body: some View {
+    HStack(spacing: 4) {
+      Icon("pencil-simple", size: 12)
+      Text(text).font(.inter(TRANSCRIPT_SIZE))
+    }
+    .foregroundStyle(Ink.focus)
+    .padding(.horizontal, 6).padding(.vertical, 1)
+    .background(RoundedRectangle(cornerRadius: 4).fill(Ink.focus.opacity(hover ? 0.16 : 0.08)))
+    .contentShape(Rectangle())
+    .onHover { hover = $0 }
+    .help("The captions say this in place of the words before it, the sound is untouched. Click to select those words and Edit caption to change it")
+    .onTapGesture {
+      guard !model.claudeEditing, let a = words.min(), let b = words.max() else { return }
+      model.selectedWords = a...b
+      model.selection = nil
+      if let s = model.words[a].s { model.seek(s) }
+    }
   }
 }
 
