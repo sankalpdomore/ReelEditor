@@ -168,14 +168,33 @@ struct Transport: View {
   @ObservedObject var model: EditorModel
   @ObservedObject var clock: Clock
 
+  // As wide as it can be, then narrower in steps for a narrow video column (Sankalp, 19 Nov 2026): the time and the
+  // original length stack on two lines, then the original length goes, then the time.
   var body: some View {
+    ViewThatFits(in: .horizontal) {
+      ForEach(0..<4) { row($0) }
+    }
+    .frame(minWidth: 0, maxWidth: .infinity)
+    .frame(height: 72)
+    .clipped()
+  }
+
+  func row(_ k: Int) -> some View {
     let out = outputOf(model.plan, clock.time) / model.speed
-    HStack(spacing: 24) {
-      HStack(spacing: 4) {
-        Text(timecode(out)).foregroundStyle(Ink.strong)
-        Text("/ \(timecode(model.plan.duration / model.speed))").foregroundStyle(Ink.faint)
+    return HStack(spacing: k == 0 ? 24 : 16) {
+      if k == 0 {
+        HStack(spacing: 4) {
+          Text(timecode(out)).foregroundStyle(Ink.strong)
+          Text("/ \(timecode(model.plan.duration / model.speed))").foregroundStyle(Ink.faint)
+        }
+        .font(.inter(16)).monospacedDigit().fixedSize()
+      } else if k <= 2 {
+        VStack(alignment: .trailing, spacing: 0) {
+          Text(timecode(out)).font(.inter(14)).foregroundStyle(Ink.strong)
+          Text(timecode(model.plan.duration / model.speed)).font(.inter(12)).foregroundStyle(Ink.faint)
+        }
+        .monospacedDigit().fixedSize()
       }
-      .font(.inter(16)).monospacedDigit().fixedSize()
       Button { model.step(-1.0 / 30) } label: { Icon("skip-back", size: 18) }.pill(.ghost, .icon).help("Back a frame (Left arrow, a second with Shift)")
       Button { model.togglePlay() } label: { Icon(clock.playing ? "pause" : "play", size: 22, fill: true).foregroundStyle(Ink.onPrimary) }
         .buttonStyle(.plain)
@@ -184,10 +203,17 @@ struct Transport: View {
         .contentShape(Circle())
         .help("Play or pause (Space)")
       Button { model.step(1.0 / 30) } label: { Icon("skip-forward", size: 18) }.pill(.ghost, .icon).help("Forward a frame (Right arrow, a second with Shift)")
-      Text("Original \(timecode(model.plan.editDuration))").font(.inter(16)).foregroundStyle(Ink.faint).monospacedDigit().fixedSize()
+      if k == 0 {
+        Text("Original \(timecode(model.plan.editDuration))").font(.inter(16)).foregroundStyle(Ink.faint).monospacedDigit().fixedSize()
+      } else if k == 1 {
+        VStack(alignment: .leading, spacing: 0) {
+          Text("Original").font(.inter(12)).foregroundStyle(Ink.faint)
+          Text(timecode(model.plan.editDuration)).font(.inter(14)).foregroundStyle(Ink.faint)
+        }
+        .monospacedDigit().fixedSize()
+      }
     }
     .foregroundStyle(Ink.text)
-    .frame(maxWidth: .infinity)
-    .frame(height: 72)
+    .padding(.horizontal, 12)
   }
 }

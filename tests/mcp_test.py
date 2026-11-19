@@ -15,7 +15,7 @@ os.makedirs(os.path.join(HOME, "_music"))
 shutil.copy(os.path.join(MEDIA, "music.m4a"), os.path.join(HOME, "_music", "bed.m4a"))
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env = dict(os.environ, REEL_EDITOR_HOME=HOME, REEL_EDITOR_NO_OPEN="1",
-           REEL_WHISPERX_SCRIPT=os.path.join(REPO, "Resources", "transcribe_whisperx.py"), REEL_AUDIT_SCRIPT=os.path.join(REPO, "Resources", "audit_audio.py"), REEL_NO_TRASH="1", REEL_NO_DECIPHER="1",
+           REEL_WHISPERX_SCRIPT=os.path.join(REPO, "Resources", "transcribe_whisperx.py"), REEL_AUDIT_SCRIPT=os.path.join(REPO, "Resources", "audit_audio.py"), REEL_VAD_SCRIPT=os.path.join(REPO, "Resources", "speech_vad.py"), REEL_NO_TRASH="1", REEL_NO_DECIPHER="1",
            REEL_FIND_ROOTS=os.path.join(SCRATCH, "find-roots"))
 proc = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
 nid = 0
@@ -681,21 +681,56 @@ ok("undo", {"project": T}, "undo the cut")
 r = ok("edit_caption", {"project": T, "start": 0, "end": 7.5, "text": None}, "edit_caption text null over the reel")
 check("text null takes every rewrite the stretch overlaps away", sorted(r.get("removed", [])) == ["r1", "r2"] and "captionRewrites" not in pj(T)["edits"], r)
 bad("edit_caption", {"project": T, "start": 0, "end": 1, "text": ""}, "not_found", "edit_caption taking away where there is no rewrite")
-# Captions only while the voice is heard (15 Nov 2026): a word the transcriber stretched over silence is fitted to its voice.
+# Captions only while the voice is heard (15 Nov 2026): a word the transcriber stretched over silence is fitted to the
+# speech the Silero detector finds (19 Nov 2026), or to the loudness when the WhisperX Python is not on this Mac.
+VAD = os.path.exists(os.path.expanduser("~/Coding projects/WhisperX/venv/bin/python"))
+said = os.path.join(SCRATCH, "said.aiff")
+subprocess.run(["say", "-o", said, "hello there"], check=True)
+said_len = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", said], capture_output=True, text=True).stdout)
 vfile = os.path.join(SCRATCH, "voice.mp4")
-subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=320x240:d=6:r=30", "-f", "lavfi", "-i",
-                "aevalsrc=0.003*(random(0)-0.5)+(between(t\\,3\\,3.6)+between(t\\,4\\,4.5))*0.5*sin(2*PI*300*t):s=16000:d=6",
-                "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", vfile], check=True)
-json.dump([{"w": "hello", "s": 0.5, "e": 3.6}, {"w": "there.", "s": 4.0, "e": 5.9}], open(os.path.join(SCRATCH, "voice-words.json"), "w"))
+subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=320x240:d=7:r=30", "-f", "lavfi", "-i", "anoisesrc=a=0.002:d=7:r=16000",
+                "-i", said, "-filter_complex", "[2]adelay=3000|3000,apad[v];[1][v]amix=inputs=2:duration=first:normalize=0[a]", "-map", "0:v", "-map", "[a]",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-t", "7", vfile], check=True)
+json.dump([{"w": "hello", "s": 0.5, "e": 3.45}, {"w": "there.", "s": 3.5, "e": 6.9}], open(os.path.join(SCRATCH, "voice-words.json"), "w"))
 V = "voice-fit"
-ok("create_project", {"path": vfile, "name": V, "transcribe": False}, "create a project with a silence before the voice")
+ok("create_project", {"path": vfile, "name": V, "transcribe": False}, "create a project with silence round the speech")
 ok("import_transcript", {"project": V, "path": os.path.join(SCRATCH, "voice-words.json")}, "voice: words stretched over the silence")
 r = ok("get_caption_style", {"project": V, "lines": True}, "get_caption_style with lines")
 ln = r.get("lines", [])
-check("a caption comes on with the voice, not at the stretched start of its first word", len(ln) == 1 and 2.8 < ln[0]["start"] < 3.05, ln)
-check("and goes off with the voice, not at the stretched end of its last word", len(ln) == 1 and 4.4 < ln[0]["end"] < 4.7, ln)
+check("a caption comes on with the speech, not at the stretched start of its first word", len(ln) == 1 and 2.7 < ln[0]["start"] < 3.2, ln)
+check("and goes off with the speech, not at the stretched end of its last word", len(ln) == 1 and ln[0]["end"] < 3 + said_len + 0.4, (ln, said_len))
 w = [l.split(" ") for l in ok("get_words", {"project": V}).get("text", "").split("\n")]
-check("the transcript keeps the transcriber's times", w[0][1:3] == ["0.50", "3.60"], w)
+check("the transcript keeps the transcriber's times", w[0][1:3] == ["0.50", "3.45"], w)
+tfile = os.path.join(SCRATCH, "tone.mp4")
+subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=320x240:d=6:r=30", "-f", "lavfi", "-i",
+                "aevalsrc=0.003*(random(0)-0.5)+(between(t\\,3\\,3.6)+between(t\\,4\\,4.5))*0.8*(random(0)-0.5):s=16000:d=6",
+                "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", tfile], check=True)
+json.dump([{"w": "hello", "s": 0.5, "e": 3.6}, {"w": "there.", "s": 4.0, "e": 5.9}], open(os.path.join(SCRATCH, "tone-words.json"), "w"))
+ok("create_project", {"path": tfile, "name": "tone-fit", "transcribe": False}, "create a project of loud noise, no speech")
+ok("import_transcript", {"project": "tone-fit", "path": os.path.join(SCRATCH, "tone-words.json")}, "noise: words over it")
+ln = ok("get_caption_style", {"project": "tone-fit", "lines": True}).get("lines", [])
+if VAD:
+    check("with the speech detector loud noise is not taken for speech, the words keep their times", len(ln) == 1 and ln[0]["start"] == 0.5 and ln[0]["end"] == 5.9, ln)
+else:
+    check("without the speech detector the loudness places the words", len(ln) == 1 and 2.8 < ln[0]["start"] < 3.05 and 4.4 < ln[0]["end"] < 4.7, ln)
+# Caption timing for the developer only (19 Nov 2026): read only with developer true in settings.json.
+def set_settings(**kw):
+    p = os.path.join(HOME, "settings.json")
+    st = json.load(open(p)) if os.path.exists(p) else {}
+    for k, v in kw.items():
+        if v is None: st.pop(k, None)
+        else: st[k] = v
+    json.dump(st, open(p, "w"))
+def first_line(): return (ok("get_caption_style", {"project": V, "lines": True}).get("lines") or [{}])[0]
+set_settings(captionTiming="transcribed")
+check("a caption timing without developer true is ignored, speech is used", 2.7 < first_line().get("start", 0) < 3.2, first_line())
+set_settings(developer=True)
+check("as transcribed puts the captions on the transcriber's times", first_line().get("start") == 0.5 and first_line().get("end") == 6.9, first_line())
+set_settings(captionTiming="loudness")
+check("loudness fits them by the loudness", 2.7 < first_line().get("start", 0) < 3.2, first_line())
+set_settings(captionTiming="speech")
+check("speech fits them by the detector", 2.7 < first_line().get("start", 0) < 3.2, first_line())
+set_settings(developer=None, captionTiming=None)
 bad("hide_captions", {"project": T}, "invalid_input", "hide_captions with no stretch")
 ok("hide_captions", {"project": T, "start": 0, "end": 1.5}, "hide the captions at the start")
 r = ok("add_text_layer", {"project": T, "text": "Big news\nToday", "whole": True, "font": "Inter", "weight": 800, "size": 120, "color": "#ffff00", "y": 540, "enter": "pop", "exit": "slide-left"}, "add_text_layer over the whole reel")

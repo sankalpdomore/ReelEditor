@@ -492,7 +492,7 @@ struct ClipHeader: View {
       Text(p.label).font(.inter(13, .semibold)).foregroundStyle(Ink.strong).lineLimit(1).truncationMode(.middle)
       if let c {
         Text("\(clipName(p.clip)), \(Self.time(c.inn)) to \(Self.time(c.out)) of the video, \(Self.time(c.length)) long")
-          .font(.inter(12)).foregroundStyle(Ink.faint).lineLimit(1)
+          .font(.inter(12)).foregroundStyle(Ink.faint).lineLimit(1).truncationMode(.tail).layoutPriority(-1)
       }
       Spacer(minLength: 0)
     }

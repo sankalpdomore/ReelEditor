@@ -34,6 +34,18 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
   // Find missing videos in App settings: Claude may search this Mac for a project's missing files. Kept in settings.json,
   // where reel-mcp reads it, and saved there when it changes.
   @Published var searchMac = FindSource.allowed { didSet { if searchMac != oldValue { try? FindSource.setAllowed(searchMac); Log.write("app", "search_mac", extra: ["on": .bool(searchMac)]) } } }
+  // The Developer card in App settings, shown only with developer true in settings.json (Sankalp's Mac): how the
+  // captions are timed, saved there too so reel-mcp and the export time them the same way, and every open editor
+  // draws its captions again when it changes.
+  let developer = Voice.developer
+  @Published var captionTiming = Voice.timing {
+    didSet {
+      guard captionTiming != oldValue else { return }
+      try? Voice.setTiming(captionTiming)
+      Log.write("app", "caption_timing", extra: ["timing": .string(captionTiming.rawValue)])
+      for e in editors.values { e.redrawCaptions() }
+    }
+  }
   @Published var exportWidth: CGFloat = 0 // Export at the right end of the top bar, which App settings sits left of
   // The rule books modal, opened from the rule book count in the chat, and the book shown in it (nil is the first).
   // REEL_EDITOR_RULES=1 opens it at launch, for a snapshot.
@@ -376,6 +388,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // REEL_EDITOR_SNAPSHOT=<file.png>: writes a picture of the window every few seconds, and the tabs beside it, for
     // checking the layout without screen recording access. The video does not show in it, only the interface.
     if let path = ProcessInfo.processInfo.environment["REEL_EDITOR_SNAPSHOT"] {
+      // REEL_EDITOR_WINDOW=1000x700 sets the window's size, for checking a narrow layout.
+      if let size = ProcessInfo.processInfo.environment["REEL_EDITOR_WINDOW"]?.split(separator: "x").compactMap({ Double($0) }), size.count == 2 {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+          MainActor.assumeIsolated { NSApp.windows.first(where: { $0.isVisible })?.setContentSize(NSSize(width: size[0], height: size[1])) }
+        }
+      }
       Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { _ in
         MainActor.assumeIsolated {
           guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }), let view = window.contentView?.superview ?? window.contentView,
@@ -579,8 +597,12 @@ struct TopBar: View {
   @ObservedObject var app: AppModel
   var model: EditorModel?
   @Environment(\.uiZoom) private var zoom
+  @State private var width: CGFloat = 2000
 
   var body: some View {
+    // A narrow window shows the layouts and App settings as icons alone, so the reel's name keeps its room
+    // (Sankalp, 19 Nov 2026).
+    let compact = width < 1400
     HStack(spacing: 16) {
       Color.clear.frame(width: 60 / zoom, height: 1) // the close, minimise and zoom buttons, which do not zoom
       HStack(spacing: 8) {
@@ -601,13 +623,16 @@ struct TopBar: View {
       .layoutPriority(-1)
       Spacer(minLength: 16)
       // The layouts, App settings, then Export at the right end (Sankalp, 2 Nov 2026).
-      if let model { EditorActions(model: model) }
-      Button { withAnimation(app.settingsOpen ? .cardClose : .cardOpen) { app.settingsOpen.toggle() } } label: { IconLabel("App settings", icon: "gear", size: 16) }
-        .pill(.outline, .md, active: app.settingsOpen).help("The app's appearance and how agents connect")
+      if let model { EditorActions(model: model, compact: compact) }
+      Button { withAnimation(app.settingsOpen ? .cardClose : .cardOpen) { app.settingsOpen.toggle() } } label: {
+        if compact { Icon("gear", size: 16) } else { IconLabel("App settings", icon: "gear", size: 16).fixedSize() }
+      }
+        .pill(.outline, compact ? .icon : .md, active: app.settingsOpen).help("App settings: the app's appearance and how agents connect")
       if let model { ExportButton(model: model, app: app) }
     }
     .padding(.horizontal, 20)
     .frame(height: 56)
+    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
     .background(WindowDragArea())
     .overlay(alignment: .bottom) { Hairline() }
   }
@@ -706,6 +731,7 @@ struct UndoRedo: View {
 // Wide, Tall and Distraction free as tabs, near the right end of the top bar.
 struct EditorActions: View {
   @ObservedObject var model: EditorModel
+  var compact = false // icons alone in a narrow window, each named on hover
   @AppStorage("layoutLandscape") private var layoutLandscape = EditorLayout.wide.rawValue
   @AppStorage("layoutPortrait") private var layoutPortrait = EditorLayout.tall.rawValue
 
@@ -722,7 +748,7 @@ struct EditorActions: View {
         model.focus = false
         if landscape { layoutLandscape = v } else { layoutPortrait = v }
         Log.write("app", "layout", args: ["layout": .string(v), "landscape": .bool(landscape)])
-      }))
+      }), iconOnly: compact)
     }
   }
 }
@@ -906,6 +932,17 @@ struct AppSettingsPanel: View {
           InsetCard(title: "Find missing videos", icon: "magnifying-glass") {
             Toggle("Let Claude search this Mac for a project's videos when they are moved or renamed, and link them again", isOn: $app.searchMac).toggleStyle(.pillSwitch)
             Note("Spotlight and your usual folders are searched by name and length. macOS may ask once for each folder, such as Downloads or Documents.")
+          }
+          if app.developer {
+            InsetCard(title: "Developer", icon: "code") {
+              Text("Caption timing").font(.inter(13, .medium)).foregroundStyle(Ink.text)
+              SegmentTabs(items: [
+                SegmentItem(value: Voice.Timing.transcribed, label: "Transcript", icon: "text-align-left"),
+                SegmentItem(value: Voice.Timing.loudness, label: "Loudness", icon: "waveform"),
+                SegmentItem(value: Voice.Timing.speech, label: "Speech", icon: "microphone"),
+              ], selection: $app.captionTiming, fullWidth: true, height: 36)
+              Note("Only on this Mac, where settings.json has developer true. Everyone else always gets Speech: each word the transcriber held too long is fitted to where the speech detector hears it.")
+            }
           }
           InsetCard(title: "Agents (MCP)", icon: "plugs-connected") {
             Note("Claude or any MCP client edits the same projects through the editor's tools, and this window follows along live. To add the tools to Claude Code:")

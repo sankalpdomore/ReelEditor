@@ -439,12 +439,13 @@ struct StepperPill<Accessory: View>: View {
   let help: String
   let minus: () -> Void
   let plus: () -> Void
+  var showsIcon = true // false in a narrow bar, the value alone between minus and plus
   @ViewBuilder var accessory: Accessory
   var body: some View {
     HStack(spacing: 0) {
       Button(action: minus) { Icon("minus", size: 14).frame(width: 28, height: 28) }.buttonStyle(.plain)
-      HStack(spacing: 4) { Icon(icon, size: 14); Text(value).monospacedDigit().lineLimit(1).fixedSize() }
-        .font(.inter(13, .medium)).frame(minWidth: 52)
+      HStack(spacing: 4) { if showsIcon { Icon(icon, size: 14) }; Text(value).monospacedDigit().lineLimit(1).fixedSize() }
+        .font(.inter(13, .medium)).frame(minWidth: showsIcon ? 52 : 36)
         .help(help)
       Button(action: plus) { Icon("plus", size: 14).frame(width: 28, height: 28) }.buttonStyle(.plain)
       if Accessory.self != EmptyView.self {
@@ -460,8 +461,8 @@ struct StepperPill<Accessory: View>: View {
 }
 
 extension StepperPill where Accessory == EmptyView {
-  init(icon: String, value: String, help: String, minus: @escaping () -> Void, plus: @escaping () -> Void) {
-    self.init(icon: icon, value: value, help: help, minus: minus, plus: plus) { EmptyView() }
+  init(icon: String, value: String, help: String, minus: @escaping () -> Void, plus: @escaping () -> Void, showsIcon: Bool = true) {
+    self.init(icon: icon, value: value, help: help, minus: minus, plus: plus, showsIcon: showsIcon) { EmptyView() }
   }
 }
 
@@ -482,10 +483,11 @@ struct InlineToggle: View {
   let icon: String
   @Binding var on: Bool
   var help: String = ""
+  var showsLabel = true // false in a narrow bar, the icon alone
   @State private var hover = false
   var body: some View {
     Button { withAnimation(.easeOut(duration: 0.15)) { on.toggle() } } label: {
-      HStack(spacing: 4) { Icon(icon, size: 14, fill: on); Text(label) }
+      HStack(spacing: 4) { Icon(icon, size: 14, fill: on); if showsLabel { Text(label) } }
         .font(.inter(13, .medium))
         .foregroundStyle(on ? Ink.onPrimary : hover ? Ink.text : Ink.faint)
         .padding(.horizontal, 8).frame(height: 24)

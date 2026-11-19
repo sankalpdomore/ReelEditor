@@ -25,33 +25,50 @@ struct PanelHead: View {
   @AppStorage("chatDock") private var dock = "floating"
   @AppStorage("chatSide") private var sideOpen = false
 
+  // The head with every word, then the buttons as icons alone when the column is too narrow for their words
+  // (Sankalp, 19 Nov 2026), so Open folder is never cut off at the column's edge.
   var body: some View {
+    ViewThatFits(in: .horizontal) {
+      head(full: true)
+      head(full: false)
+    }
+    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+    .clipped()
+  }
+
+  func head(full: Bool) -> some View {
     let saved = max(0, model.plan.editDuration - model.plan.duration / model.speed)
-    HStack(spacing: 12) {
+    return HStack(spacing: full ? 12 : 8) {
       PanelLabel("Transcript", icon: "text-align-left").fixedSize()
-      ViewThatFits(in: .horizontal) {
-        MetaLabel("\(model.plan.cuts.count) \(model.plan.cuts.count == 1 ? "cut" : "cuts"), \(spoken(saved)) saved", icon: "scissors").fixedSize()
-        Color.clear.frame(width: 0, height: 0)
+      if full {
+        ViewThatFits(in: .horizontal) {
+          MetaLabel("\(model.plan.cuts.count) \(model.plan.cuts.count == 1 ? "cut" : "cuts"), \(spoken(saved)) saved", icon: "scissors").fixedSize()
+          Color.clear.frame(width: 0, height: 0)
+        }
       }
       Spacer(minLength: 8)
       if model.waitingCuts > 0 {
-        Button { model.run("approve_cuts") } label: { IconLabel("Approve \(model.waitingCuts)", icon: "check", size: 12) }
+        Button { model.run("approve_cuts") } label: { IconLabel(full ? "Approve \(model.waitingCuts)" : "\(model.waitingCuts)", icon: "check", size: 12) }
           .pill(.primary, .xs).disabled(model.claudeEditing)
-          .help("Cuts Claude made from the chat wait for your approval, drawn in amber. They already play as cuts.")
+          .help("Approve \(model.waitingCuts): cuts Claude made from the chat wait for your approval, drawn in amber. They already play as cuts.")
       }
-      Button { model.toggle(.project) } label: { IconLabel("Project", icon: "sliders-horizontal", size: 14) }
+      Button { model.toggle(.project) } label: { label("Project", icon: "sliders-horizontal", full) }
         .pill(.ghost, .xs, active: model.floating == .project)
-        .help("The reel's status, caption, look, sound, comments, files and export")
+        .help("Project: the reel's status, caption, look, sound, comments, files and export")
       // Chat opens where it was left: the side panel on the right, or the floating card.
-      Button { if dock == "side" { withAnimation(sideOpen ? .cardClose : .cardOpen) { sideOpen.toggle() } } else { model.toggle(.chat) } } label: { IconLabel("Chat", icon: "chat-circle-text", size: 14) }
+      Button { if dock == "side" { withAnimation(sideOpen ? .cardClose : .cardOpen) { sideOpen.toggle() } } else { model.toggle(.chat) } } label: { label("Chat", icon: "chat-circle-text", full) }
         .pill(.ghost, .xs, active: model.floating == .chat || (dock == "side" && sideOpen))
-        .help("Talk to the Claude connected over MCP")
-      Button { NSWorkspace.shared.activateFileViewerSelecting([Store.document(model.name) ?? Store.root]) } label: { IconLabel("Open folder", icon: "folder-open", size: 14) }
+        .help("Chat: talk to the Claude connected over MCP")
+      Button { NSWorkspace.shared.activateFileViewerSelecting([Store.document(model.name) ?? Store.root]) } label: { label("Open folder", icon: "folder-open", full) }
         .pill(.gradient, .xs)
-        .help("Show the project's file in Finder")
+        .help("Open folder: show the project's file in Finder")
     }
-    .padding(.leading, 32).padding(.trailing, 20)
+    .padding(.leading, full ? 32 : 24).padding(.trailing, full ? 20 : 12)
     .frame(height: 52)
+  }
+
+  @ViewBuilder func label(_ text: String, icon: String, _ full: Bool) -> some View {
+    if full { IconLabel(text, icon: icon, size: 14).fixedSize() } else { Icon(icon, size: 14) }
   }
 }
 

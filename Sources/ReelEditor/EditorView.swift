@@ -82,7 +82,7 @@ struct EditorView: View {
         case .wide:
           VStack(spacing: 0) {
             HStack(spacing: 0) {
-              InspectorView(model: model).frame(maxWidth: .infinity, maxHeight: .infinity)
+              InspectorView(model: model).frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity).clipped()
               widthHandle(size)
               PreviewPane(model: model).frame(width: pw)
             }
@@ -97,7 +97,10 @@ struct EditorView: View {
               heightHandle(size)
               TimelinePanel(model: model, height: th)
             }
-            .frame(maxWidth: .infinity)
+            // The column never grows past its share: what is too wide inside it shrinks or is cut at its own edge,
+            // never under the video (Sankalp, 19 Nov 2026).
+            .frame(minWidth: 0, maxWidth: .infinity)
+            .clipped()
             widthHandle(size)
             PreviewPane(model: model).frame(width: pw)
           }
@@ -265,7 +268,57 @@ struct TimelineToolbar: View {
   @ObservedObject var model: EditorModel
   @ObservedObject var clock: Clock
 
+  // The bar as wide as it can be, then narrower in steps when the column is narrow, so nothing is ever cut off at its
+  // edge (Sankalp, 19 Nov 2026): the times lose their words, then stack, then go; Follow and the Claude note lose their
+  // words; the steppers lose their icons; last, the bar takes two rows, editing above, the times, speed and zoom below.
   var body: some View {
+    ViewThatFits(in: .horizontal) {
+      ForEach(0..<5) { bar($0) }
+      twoRows
+    }
+    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+    .clipped()
+  }
+
+  func bar(_ k: Int) -> some View {
+    HStack(spacing: 4) {
+      editing(k)
+      Spacer(minLength: 12)
+      if k == 0 { times(full: true) } else if k == 1 { times(full: false) } else if k <= 3 { stackedTimes }
+      steppers(icons: k <= 3)
+      follow(label: k <= 2)
+    }
+    .padding(.horizontal, 12)
+    .frame(height: 52)
+  }
+
+  var twoRows: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 4) { editing(4); Spacer(minLength: 8); follow(label: false) }.frame(height: 44)
+      HStack(spacing: 4) { stackedTimes; Spacer(minLength: 8); steppers(icons: false) }.frame(height: 44)
+    }
+    .padding(.horizontal, 12).padding(.vertical, 4)
+  }
+
+  func steppers(icons: Bool) -> some View {
+    HStack(spacing: 4) {
+      StepperPill(icon: "gauge", value: String(format: "%.1fx", model.speed), help: "Playback and export speed",
+        minus: { setSpeed(model.speed - 0.1) }, plus: { setSpeed(model.speed + 0.1) }, showsIcon: icons)
+      StepperPill(icon: "magnifying-glass", value: "\(Int((model.zoom / 24 * 100).rounded()))%", help: "Zoom the timeline (pinch, Cmd or Ctrl with the scroll wheel, or = and -)",
+        minus: { model.zoom = max(1, model.zoom / 1.25) }, plus: { model.zoom = min(160, model.zoom * 1.25) }, showsIcon: icons)
+    }
+  }
+
+  // Follow, its own setting in a pill of its own beside the zoom.
+  func follow(label: Bool) -> some View {
+    PillBox {
+      InlineToggle(label: "Follow", icon: "navigation-arrow", on: $model.follow,
+        help: "Follow: while playing, the timeline and the transcript keep the playhead in view", showsLabel: label)
+    }
+  }
+
+  // The editing buttons, play, and any note: Claude editing, an error, a job running.
+  @ViewBuilder func editing(_ k: Int) -> some View {
     HStack(spacing: 4) {
       let hasSelection = model.selection != nil || model.selectedWords != nil
       let locked = model.claudeEditing // Claude is editing: the editing buttons wait (Sankalp, 2 Nov 2026)
@@ -283,7 +336,8 @@ struct TimelineToolbar: View {
       if locked {
         HStack(spacing: 8) {
           Icon("lock-simple", size: 12)
-          Text("Claude is editing, your edits wait").font(.inter(12)).lineLimit(1)
+          if k <= 1 { Text("Claude is editing, your edits wait").font(.inter(12)).lineLimit(1).fixedSize() }
+          else if k == 2 { Text("Claude is editing").font(.inter(12)).lineLimit(1).fixedSize() }
           if DirectChat.shared.isWorking(model.name) {
             Button("Stop") { DirectChat.shared.interrupt() }.buttonStyle(.plain).font(.inter(12, .semibold)).foregroundStyle(Ink.text)
           }
@@ -298,7 +352,7 @@ struct TimelineToolbar: View {
       if let e = model.error, e != EditorModel.lockedNote, model.rc != nil { // without a composition the error already fills the video pane
         HStack(spacing: 8) {
           Icon("warning-circle", size: 14)
-          Text(e).font(.inter(12)).lineLimit(1).truncationMode(.tail)
+          Text(e).font(.inter(12)).lineLimit(1).truncationMode(.tail).frame(maxWidth: k <= 1 ? 320 : k == 2 ? 180 : 96, alignment: .leading)
           Button { model.error = nil } label: { Icon("x", size: 12) }.buttonStyle(.plain)
         }
         .foregroundStyle(Ink.red)
@@ -306,33 +360,18 @@ struct TimelineToolbar: View {
         .background(Capsule().fill(Ink.red.opacity(0.08)))
         .overlay(Capsule().strokeBorder(Ink.red.opacity(0.3), lineWidth: 1))
         .padding(.leading, 8)
+        .help(e)
       }
       if let m = model.status["message"]?.string, ["transcribing", "exporting"].contains(model.status["state"]?.string ?? "") {
-        HStack(spacing: 8) { Spinner(size: 12); Text(m).font(.inter(12)).lineLimit(1) }
+        HStack(spacing: 8) { Spinner(size: 12); Text(m).font(.inter(12)).lineLimit(1).frame(maxWidth: k <= 1 ? 280 : k == 2 ? 160 : 80, alignment: .leading) }
           .foregroundStyle(Ink.secondary)
           .padding(.horizontal, 12).frame(height: 28)
           .background(Capsule().fill(Ink.sunken))
           .overlay(Capsule().strokeBorder(Ink.border, lineWidth: 1))
           .padding(.leading, 8)
-      }
-      Spacer(minLength: 12)
-      ViewThatFits(in: .horizontal) {
-        times(full: true)
-        times(full: false)
-        Color.clear.frame(width: 0, height: 0)
-      }
-      StepperPill(icon: "gauge", value: String(format: "%.1fx", model.speed), help: "Playback and export speed",
-        minus: { setSpeed(model.speed - 0.1) }, plus: { setSpeed(model.speed + 0.1) })
-      StepperPill(icon: "magnifying-glass", value: "\(Int((model.zoom / 24 * 100).rounded()))%", help: "Zoom the timeline (pinch, Cmd or Ctrl with the scroll wheel, or = and -)",
-        minus: { model.zoom = max(1, model.zoom / 1.25) }, plus: { model.zoom = min(160, model.zoom * 1.25) })
-      // Follow, its own setting in a pill of its own beside the zoom.
-      PillBox {
-        InlineToggle(label: "Follow", icon: "navigation-arrow", on: $model.follow,
-          help: "Follow: while playing, the timeline and the transcript keep the playhead in view")
+          .help(m)
       }
     }
-    .padding(.horizontal, 12)
-    .frame(height: 52)
   }
 
   func setSpeed(_ s: Double) { model.run("set_speed", ["speed": .number((min(2, max(0.5, s)) * 10).rounded() / 10)]) }
@@ -349,6 +388,17 @@ struct TimelineToolbar: View {
       }
     }
     .font(.inter(12))
+    .monospacedDigit()
+    .fixedSize()
+    .padding(.trailing, 8)
+  }
+
+  // Current over Trimmed, for a narrow bar.
+  var stackedTimes: some View {
+    VStack(alignment: .trailing, spacing: 2) {
+      MetaLabel(timecode(clock.time), icon: "play-circle").help("Current")
+      MetaLabel(timecode(model.plan.duration / model.speed), icon: "scissors").help("Trimmed")
+    }
     .monospacedDigit()
     .fixedSize()
     .padding(.trailing, 8)

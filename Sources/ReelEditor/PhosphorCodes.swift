@@ -27,6 +27,7 @@ enum PhosphorCodes {
     "check": 0xe182,
     "check-circle": 0xe184,
     "closed-captioning": 0xe1a4,
+    "code": 0xe1bc,
     "coins": 0xe78e,
     "columns": 0xe546,
     "command": 0xe1c4,

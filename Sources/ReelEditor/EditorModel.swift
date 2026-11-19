@@ -307,6 +307,9 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
     }
   }
 
+  // The captions drawn again, after the caption timing changes in App settings' Developer card.
+  func redrawCaptions() { derive() }
+
   // Each video's voice levels, read off the main thread the first time a file is in the project, then the captions drawn
   // again fitted to them (Voice.swift).
   private var voiceRead = Set<String>()
