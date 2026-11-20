@@ -1,0 +1,50 @@
+.draft-switcher {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  z-index: 30;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 100px;
+  border: 1px solid #ddd;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+}
+
+.draft-switcher-label {
+  padding: 0 8px 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #888;
+}
+
+.draft-switcher-item {
+  height: 32px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 100px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #555;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.draft-switcher-item:hover {
+  background: #f5f5f5;
+  color: #111;
+}
+
+.draft-switcher-item--on,
+.draft-switcher-item--on:hover {
+  background: #111;
+  color: #fff;
+}

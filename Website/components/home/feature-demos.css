@@ -1,0 +1,347 @@
+/* The demos sit inside the white body of an inset card (16px radius), so their own boxes start at 12px. */
+.demo {
+  font-size: 14px;
+  line-height: 1.4;
+  color: #111;
+}
+
+/* Transcript */
+.demo-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #ddd;
+}
+
+.demo-toolbar-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #555;
+}
+
+.demo-toolbar-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #888;
+}
+
+.demo-toolbar-approve {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 100px;
+  background: linear-gradient(0deg, #111, #333);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.demo-transcript-text {
+  padding: 16px 0;
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+.demo-word--cut {
+  color: #c89b3c;
+  text-decoration-line: line-through;
+  text-decoration-color: rgba(200, 155, 60, 0.6);
+  animation: demo-word-cut 4s ease-in-out infinite;
+}
+
+.demo-word--cut-2 {
+  animation-delay: 0.4s;
+}
+
+@keyframes demo-word-cut {
+  0%,
+  15% {
+    color: #111;
+    text-decoration-color: transparent;
+  }
+  30%,
+  100% {
+    color: #c89b3c;
+    text-decoration-color: rgba(200, 155, 60, 0.6);
+  }
+}
+
+.demo-menu {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 100px;
+  border: 1px solid #ddd;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+
+.demo-menu-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 100px;
+  border: 1px solid #ddd;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Repeat */
+.demo-repeat-take {
+  border-radius: 12px;
+  padding: 12px;
+  border: 1px solid #ddd;
+}
+
+.demo-repeat-take + .demo-repeat-take {
+  margin-top: 8px;
+}
+
+.demo-repeat-take--first {
+  background: #fff7e8;
+  border-color: #f0dcae;
+}
+
+.demo-repeat-take--first .demo-repeat-take-text {
+  text-decoration: line-through;
+  text-decoration-color: rgba(200, 155, 60, 0.6);
+  color: #b0883a;
+}
+
+.demo-repeat-take-tag {
+  display: inline-block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #b0883a;
+}
+
+.demo-repeat-take-tag--kept {
+  color: #555;
+}
+
+.demo-repeat-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: #555;
+}
+
+/* Caption */
+.demo--caption {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 20px;
+  align-items: center;
+}
+
+.demo-caption-phone {
+  border-radius: 24px;
+  padding: 4px;
+  background: #111;
+}
+
+.demo-caption-phone-screen {
+  aspect-ratio: 9 / 16;
+  border-radius: 20px;
+  background: linear-gradient(170deg, #9bb8a0, #4e6b55 55%, #2f3f33);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0 8px 72px;
+  text-align: center;
+}
+
+.demo-caption-line {
+  font-family: var(--font-advercase), var(--font-inter), sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 1.3;
+  color: #fff;
+  -webkit-text-stroke: 1px #111;
+}
+
+.demo-caption-line-word--active {
+  background: #111;
+  border-radius: 4px;
+  padding: 0 4px;
+  -webkit-text-stroke: 0;
+}
+
+.demo-caption-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #eee;
+}
+
+.demo-caption-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+}
+
+.demo-caption-field-heard {
+  color: #888;
+  text-decoration: underline dotted #3b82f6;
+  text-underline-offset: 4px;
+}
+
+.demo-caption-field-new {
+  display: inline-flex;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+  font-weight: 500;
+}
+
+.demo-caption-field .ph-arrow-down {
+  color: #888;
+}
+
+.demo-caption-timing {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+  font-size: 12px;
+  color: #555;
+}
+
+.demo-caption-timing-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.demo-caption-timing-bar {
+  height: 8px;
+  border-radius: 4px;
+  width: 120px;
+}
+
+.demo-caption-timing-bar--heard {
+  background: repeating-linear-gradient(90deg, #555 0 2px, transparent 2px 5px);
+  margin-left: 64px;
+  width: 72px;
+}
+
+.demo-caption-timing-bar--caption {
+  background: #3b82f6;
+  margin-left: 64px;
+  width: 72px;
+}
+
+/* Rules */
+.demo-rules-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 12px;
+  font-weight: 600;
+  color: #333;
+}
+
+.demo-rules-head span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.demo-rules-head-status {
+  font-weight: 500;
+  color: #c2410c;
+}
+
+.demo-rules-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.demo-rules-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #f5f5f5;
+}
+
+.demo-rules-list-item--ok i {
+  color: #16a34a;
+}
+
+.demo-rules-list-item--fix {
+  background: #fff7ed;
+}
+
+.demo-rules-list-item--fix i {
+  color: #c2410c;
+}
+
+.demo-rules-list-item-fix {
+  margin-left: auto;
+  font-size: 12px;
+  color: #c2410c;
+}
+
+/* Private */
+.demo--private {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.demo-private-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border-radius: 12px;
+  background: #f5f5f5;
+  font-weight: 500;
+}
+
+.demo-private-row-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #ddd;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: #333;
+}
+
+@media (max-width: 640px) {
+  .demo--caption {
+    grid-template-columns: 120px 1fr;
+    gap: 12px;
+  }
+  .demo-transcript-text {
+    font-size: 16px;
+  }
+}

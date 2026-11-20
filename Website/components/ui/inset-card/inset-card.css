@@ -1,0 +1,37 @@
+.inset-card {
+  display: flex;
+  flex-direction: column;
+  background: #eee;
+  border-radius: 20px;
+  padding: 0 4px 4px;
+}
+
+.inset-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px;
+  font-size: 14px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: #333;
+}
+
+.inset-card-head-icon {
+  font-size: 16px;
+  color: #555;
+}
+
+.inset-card-head-aside {
+  margin-left: auto;
+  font-weight: 500;
+  color: #888;
+}
+
+.inset-card-body {
+  flex: 1;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 16px;
+  padding: 16px;
+}

@@ -1,6 +1,6 @@
 # Reel Editor for Mac
 
-**Last Updated**: November 15, 2026  
+**Last Updated**: November 19, 2026  
 **Status**: 🚧 Phase 11 and 11b In Progress - reels of several videos, a chat per project that writes rule books, notifications, Claude editing alone, captions and text layers (Phase 11c) and the voice up to 1000% landed on 2 Nov 2026, and WhisperX from the Dock, clips listed with no transcript and rule books read live on 4 Nov 2026; the music library, free layers, the web editor's React animations and moving words by hand are still open.  
 **Priority**: High  
 
@@ -209,6 +209,20 @@
 - [ ] Hands on checks of 2 Nov 2026 - the timeline scrolling up and down with the names following and its sideways bar at the bottom, the side chat's divider, Stop in the chat, a comment going to the chat, clip heads dragged to reorder, switching projects while a chat's Claude works, a notification's click, the shimmer while Claude reads, and the editing buttons coming back when it finishes, the Voice card at 200% heard in the preview, the thin scroll bars in the transcript, chat and timeline, a click on the caption in the preview, cards scrolling at 60% of the window, and the app reopening on the project in front
 - [ ] Automated interface tests - none exist; `swift test` finds no tests
 - [ ] A long project from start to export in the Mac app alone, compared with the web editor's export of the same edits
+
+### Phase 12b: Ready for other people's Macs ⏳ PENDING
+- [x] Decision (Sankalp, 19 Nov 2026) - release Reel Editor and list it in the product catalogue, after weighing HyperFrames by HeyGen, free, whose Studio app already cuts talking-head video by its words; Reel Editor's edge is local transcription with no sign-in or credits, the rule books and check_rules, the letter by letter repeat check, and captions fitted to detected speech
+- [ ] Transcription without Sankalp's Python - WhisperX, the wav2vec2 aligner of audit_audio and the Silero detector run today from `~/Coding projects/WhisperX/venv`; ship them inside the app, WhisperKit or whisper.cpp for words and Core ML for the aligner and the detector, or a one click installer the app runs
+- [ ] No personal names or paths - the chat's system prompt and tool texts say Sankalp, `transcribe_whisperx.py` defaults to his folders, the bundle id is com.sankalpsinha.reeleditor, the rule books default to his iCloud folder; take the user's name from the app and the paths from settings
+- [ ] Claude for a new user - the chat runs the `claude` command line on the user's own Claude login; a first run check that finds it, explains how to install and sign in, and adds `reel-mcp` to Claude Code in one click
+- [ ] First run - a welcome with a sample reel, macOS permission prompts explained, and the default projects folder chosen
+- [ ] Developer-only switches hidden - the Developer card needs developer true in settings.json; check every REEL_EDITOR_ switch and debug path is off in a release build
+- [ ] Pricing and licence - free, one-time or subscription, checkout through the same provider as the other products, and a licence check that works offline
+- [x] Website draft (Sankalp, 19 Nov 2026) - a Next.js site in `Website/` beside `MacApp/`, built on NextDoor.Company's Button, inset cards, Phosphor icons and tone: a home page and a pricing page with the beta request form and FAQ
+- [x] Landing chosen - version A in the style of cleanshot.com, light with alternating feature rows and demos, is the home page going forward; version B in the style of screen.studio, dark with one centred statement per section, stays at `/v2` for reference
+- [ ] Download page and catalogue listing - a real screen recording in place of the snapshot, the beta form connected, the price, and the listing in the product catalogue
+- [ ] Privacy and terms - what stays on the Mac (everything but the Claude chat) and what leaves it
+- [ ] Private beta - five to ten creators who post talking-head reels, a feedback channel, and fixes before the public release
 
 ### Phase 13: Analytics and PostHog Tracking ⏳ PENDING
 - [ ] Decide whether the Mac app reports to PostHog at all - it is a local tool for one person today and logs every action to `_dump/*.jsonl`; if it does, the events below are sent with `email` (the Claude account in use) and `user_id`, and added to `README-Analytics-Posthog-Universal-Logging-System.md` in NextDoorCompanyCode

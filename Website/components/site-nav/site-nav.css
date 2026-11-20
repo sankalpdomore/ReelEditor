@@ -1,0 +1,95 @@
+.site-nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(255, 255, 255, 0.84);
+  backdrop-filter: saturate(180%) blur(16px);
+  -webkit-backdrop-filter: saturate(180%) blur(16px);
+  border-bottom: 1px solid #ddd;
+}
+
+.site-nav-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  height: 64px;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+.site-nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #111;
+  text-decoration: none;
+}
+
+.site-nav-brand-icon {
+  border-radius: 8px;
+}
+
+.site-nav-brand-name {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.site-nav-links {
+  display: flex;
+  gap: 4px;
+}
+
+.site-nav-links-item {
+  padding: 8px 12px;
+  border-radius: 100px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #555;
+  text-decoration: none;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.site-nav-links-item:hover {
+  background: #f5f5f5;
+  color: #111;
+}
+
+.site-nav-links-item--active {
+  color: #111;
+  font-weight: 500;
+}
+
+.site-nav-cta {
+  margin-left: auto;
+}
+
+/* Dark, for a dark page */
+.site-nav--dark {
+  background: rgba(17, 17, 17, 0.8);
+  border-bottom-color: #333;
+}
+
+.site-nav--dark .site-nav-brand,
+.site-nav--dark .site-nav-links-item--active {
+  color: #fff;
+}
+
+.site-nav--dark .site-nav-links-item {
+  color: #aaa;
+}
+
+.site-nav--dark .site-nav-links-item:hover {
+  background: #222;
+  color: #fff;
+}
+
+@media (max-width: 640px) {
+  .site-nav-inner {
+    gap: 12px;
+    padding: 0 16px;
+  }
+  .site-nav-links-item--faq {
+    display: none;
+  }
+}

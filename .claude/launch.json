@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "reel-editor-website",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--dir",
+        "Website",
+        "dev"
+      ],
+      "port": 3010
+    }
+  ]
+}

@@ -1,0 +1,336 @@
+/* Sections share one width and one title style. */
+.home-section-title {
+  max-width: 720px;
+  margin: 0 auto 40px;
+  text-align: center;
+  font-size: 36px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* Hero */
+.home-hero {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 80px 24px 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  background: radial-gradient(60% 40% at 50% 0%, #f5f5f5, #fff 70%);
+}
+
+.home-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 100px;
+  border: 1px solid #ddd;
+  background: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+}
+
+.home-hero-title {
+  max-width: 880px;
+  margin-top: 24px;
+  font-size: 64px;
+  line-height: 1.05;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.home-hero-subtitle {
+  max-width: 640px;
+  margin-top: 24px;
+  font-size: 20px;
+  line-height: 1.4;
+  color: #555;
+}
+
+.home-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+.home-hero-note {
+  margin-top: 12px;
+  font-size: 14px;
+  color: #888;
+}
+
+.home-hero-shot {
+  width: 100%;
+  margin-top: 56px;
+  padding: 8px;
+  border-radius: 24px;
+  background: #eee;
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.12);
+}
+
+.home-hero-shot-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 16px;
+  border: 1px solid #ddd;
+}
+
+/* How */
+.home-how {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 64px 24px;
+}
+
+.home-how-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.home-how-steps-item {
+  position: relative;
+  padding: 24px;
+  border-radius: 20px;
+  border: 1px solid #ddd;
+  background: #fff;
+}
+
+.home-how-steps-item-number {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #bbb;
+}
+
+.home-how-steps-item-icon {
+  font-size: 24px;
+  color: #111;
+}
+
+.home-how-steps-item-title {
+  margin-top: 16px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.home-how-steps-item-text {
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #555;
+}
+
+/* Feature rows */
+.home-features {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 96px;
+}
+
+.home-features-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 64px;
+  align-items: center;
+}
+
+.home-features-row--flip .home-features-row-copy {
+  order: 2;
+}
+
+.home-features-row-copy-eyebrow {
+  font-size: 14px;
+  font-weight: 600;
+  color: #2563eb;
+}
+
+.home-features-row-copy-title {
+  margin-top: 8px;
+  font-size: 36px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.home-features-row-copy-text {
+  margin-top: 16px;
+  font-size: 18px;
+  line-height: 1.5;
+  color: #555;
+}
+
+.home-features-row-copy-points {
+  list-style: none;
+  margin: 24px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.home-features-row-copy-points-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #333;
+}
+
+.home-features-row-copy-points-item i {
+  color: #16a34a;
+}
+
+.home-features-row-demo {
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.08);
+}
+
+/* More */
+.home-more {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 120px 24px 64px;
+}
+
+.home-more-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.home-more-grid-item {
+  padding: 20px;
+  border-radius: 20px;
+  border: 1px solid #ddd;
+  background: linear-gradient(180deg, #fff, #f5f5f5);
+}
+
+.home-more-grid-item-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid #ddd;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+
+.home-more-grid-item-title {
+  margin-top: 16px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.home-more-grid-item-text {
+  margin-top: 4px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #555;
+}
+
+/* Note */
+.home-note {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 64px 24px;
+  text-align: center;
+}
+
+.home-note-quote {
+  font-size: 24px;
+  line-height: 1.4;
+  font-weight: 500;
+  color: #222;
+}
+
+.home-note-by {
+  display: block;
+  margin-top: 16px;
+  font-size: 14px;
+  color: #888;
+}
+
+/* Closing */
+.home-closing {
+  margin: 32px 24px 96px;
+  padding: 64px 24px;
+  border-radius: 24px;
+  background: #111;
+  color: #fff;
+  text-align: center;
+}
+
+.home-closing-title {
+  font-size: 40px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.home-closing-text {
+  margin-top: 12px;
+  font-size: 18px;
+  color: #bbb;
+}
+
+.home-closing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+@media (max-width: 960px) {
+  .home-hero-title {
+    font-size: 44px;
+  }
+  .home-features-row {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+  .home-features-row--flip .home-features-row-copy {
+    order: 0;
+  }
+  .home-more-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .home-hero {
+    padding-top: 48px;
+  }
+  .home-hero-title {
+    font-size: 36px;
+  }
+  .home-hero-subtitle {
+    font-size: 16px;
+  }
+  .home-section-title,
+  .home-features-row-copy-title {
+    font-size: 28px;
+  }
+  .home-how-steps,
+  .home-more-grid {
+    grid-template-columns: 1fr;
+  }
+  .home-closing-title {
+    font-size: 28px;
+  }
+}

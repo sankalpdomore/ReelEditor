@@ -1,0 +1,83 @@
+.beta-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  border-radius: 20px;
+  border: 1px solid #ddd;
+  background: #fff;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.06);
+}
+
+.beta-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.beta-form-field-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+}
+
+.beta-form-field-input {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid #ddd;
+  background: #fff;
+  font: inherit;
+  color: #111;
+}
+
+.beta-form-field-input:focus {
+  outline: 2px solid #888;
+  outline-offset: 1px;
+}
+
+.beta-form-field-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.beta-form-field-chips-item {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 100px;
+  border: 1px solid #ddd;
+  background: #fff;
+  font: inherit;
+  color: #333;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.beta-form-field-chips-item:hover {
+  border-color: #ccc;
+}
+
+.beta-form-field-chips-item--on {
+  background: #111;
+  border-color: #111;
+  color: #fff;
+}
+
+.beta-form-submit {
+  margin-top: 8px;
+}
+
+.beta-form--sent {
+  align-items: flex-start;
+}
+
+.beta-form-sent-icon {
+  font-size: 24px;
+  color: #555;
+}
+
+.beta-form-sent-text {
+  font-size: 16px;
+  color: #333;
+}

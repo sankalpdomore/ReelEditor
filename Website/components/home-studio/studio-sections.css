@@ -1,0 +1,316 @@
+/* Version B: a dark page. Text in the grey stops, the key phrase of each line in white. */
+.studio-page {
+  background: #111;
+  color: #fff;
+}
+
+/* Hero */
+.studio-hero {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 72px 24px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.studio-hero-icon {
+  border-radius: 28px;
+  box-shadow: 0 0 80px rgba(37, 99, 235, 0.35);
+}
+
+.studio-hero-icon img {
+  display: block;
+  border-radius: 28px;
+}
+
+.studio-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 24px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 100px;
+  border: 1px solid #333;
+  background: #222;
+  font-size: 14px;
+  font-weight: 500;
+  color: #eee;
+}
+
+.studio-hero-title {
+  margin-top: 24px;
+  font-size: 80px;
+  line-height: 1.02;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+}
+
+.studio-hero-subtitle {
+  max-width: 720px;
+  margin-top: 24px;
+  font-size: 22px;
+  line-height: 1.4;
+  color: #888;
+}
+
+.studio-hero-subtitle strong,
+.studio-chapter-text strong {
+  color: #fff;
+  font-weight: 500;
+}
+
+.studio-hero-cta {
+  margin-top: 32px;
+}
+
+.studio-hero-note {
+  margin-top: 12px;
+  font-size: 14px;
+  color: #777;
+}
+
+.studio-hero-shot {
+  width: 100%;
+  margin-top: 64px;
+  padding: 48px 48px 0;
+  border-radius: 32px 32px 0 0;
+  background: radial-gradient(80% 120% at 50% 0%, #3b4fd8, #1e2a7a 55%, #111);
+}
+
+.studio-hero-shot-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -8px 64px rgba(0, 0, 0, 0.4);
+}
+
+/* Facts */
+.studio-facts {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 48px 24px 64px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  border-top: 1px solid #333;
+}
+
+.studio-facts-item {
+  font-size: 18px;
+  line-height: 1.5;
+  color: #888;
+}
+
+.studio-facts-item strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+/* Chapters */
+.studio-chapter,
+.studio-offline,
+.studio-more {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 96px 24px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.studio-chapter-eyebrow {
+  font-size: 18px;
+  font-weight: 600;
+  color: #8ea2ff;
+}
+
+.studio-chapter-title {
+  margin-top: 12px;
+  font-size: 56px;
+  line-height: 1.08;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.studio-chapter-text {
+  max-width: 760px;
+  margin-top: 20px;
+  font-size: 22px;
+  line-height: 1.4;
+  color: #888;
+}
+
+.studio-chapter-stage {
+  width: 100%;
+  margin-top: 48px;
+  padding: 64px 24px;
+  border-radius: 32px;
+  display: flex;
+  justify-content: center;
+}
+
+.studio-chapter-stage--blue {
+  background: linear-gradient(135deg, #1d3aa8, #4f7cff);
+}
+
+.studio-chapter-stage--amber {
+  background: linear-gradient(135deg, #7a4a12, #e3a33b);
+}
+
+.studio-chapter-stage--green {
+  background: linear-gradient(135deg, #1f5c3a, #5fbf86);
+}
+
+.studio-chapter-stage--violet {
+  background: linear-gradient(135deg, #4b2a9e, #b27cff);
+}
+
+.studio-chapter-stage--slate {
+  background: linear-gradient(135deg, #222, #555);
+}
+
+/* The demo sits in a white window, the app's own look, floating on the colour. */
+.studio-chapter-stage-window {
+  width: 100%;
+  max-width: 640px;
+  padding: 20px;
+  border-radius: 20px;
+  background: #fff;
+  color: #111;
+  text-align: left;
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.35);
+}
+
+.studio-chapter-stage-window--narrow {
+  max-width: 440px;
+}
+
+/* Offline */
+.studio-offline-columns {
+  width: 100%;
+  max-width: 880px;
+  margin-top: 40px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  text-align: left;
+}
+
+.studio-offline-columns-item {
+  padding: 24px;
+  border-radius: 20px;
+  border: 1px solid #333;
+  background: #222;
+}
+
+.studio-offline-columns-item-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.studio-offline-columns-item-text {
+  margin-top: 8px;
+  font-size: 16px;
+  line-height: 1.5;
+  color: #999;
+}
+
+/* More */
+.studio-more-grid {
+  width: 100%;
+  margin-top: 48px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.studio-more-grid-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-radius: 16px;
+  border: 1px solid #333;
+  background: #222;
+  text-align: left;
+}
+
+.studio-more-grid-item-icon {
+  font-size: 20px;
+  color: #8ea2ff;
+}
+
+.studio-more-grid-item-label {
+  font-size: 16px;
+  font-weight: 500;
+  color: #eee;
+}
+
+/* Closing */
+.studio-closing {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 128px 24px 128px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.studio-closing-title {
+  font-size: 56px;
+  line-height: 1.08;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.studio-closing-text {
+  margin: 16px 0 32px;
+  font-size: 20px;
+  color: #888;
+}
+
+@media (max-width: 960px) {
+  .studio-hero-title {
+    font-size: 56px;
+  }
+  .studio-chapter-title,
+  .studio-closing-title {
+    font-size: 40px;
+  }
+  .studio-more-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .studio-hero-title {
+    font-size: 40px;
+  }
+  .studio-hero-subtitle,
+  .studio-chapter-text {
+    font-size: 18px;
+  }
+  .studio-hero-shot {
+    padding: 24px 16px 0;
+  }
+  .studio-facts,
+  .studio-offline-columns {
+    grid-template-columns: 1fr;
+  }
+  .studio-chapter-title,
+  .studio-closing-title {
+    font-size: 32px;
+  }
+  .studio-chapter-stage {
+    padding: 32px 12px;
+  }
+}
