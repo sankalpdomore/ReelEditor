@@ -747,14 +747,19 @@ public func addTake(_ edl: Edl, _ main: EdlMain, file: String, take: String, dur
                        window: nil, origin: take)
   try checkOverlay(o)
   let gone = (edl.audioOverlays ?? []).filter { $0.isTake && $0.start < o.editEnd - EPS && $0.editEnd > o.start + EPS }.map(\.id)
+  // The caption rewrites inside it were made for the words said before; the take's own words are captioned now.
+  let rewrites = (edl.captionRewrites ?? []).filter { let m = ($0.start + $0.end) / 2; return m < o.start || m >= o.editEnd }
   var rest = (edl.audioOverlays ?? []).filter { !gone.contains($0.id) }
   var n = AudioOverlay(id: nextId("o", rest.map(\.id) + gone), file: file, label: String(label.prefix(80)), start: o.start, inn: 0, out: o.out, gain: 1, duration: o.duration, window: nil, origin: take)
   n.replaces = true; n.take = take
   rest.append(n)
   var e = edl
   e.audioOverlays = rest.sorted { $0.start < $1.start }
+  let cleared = (edl.captionRewrites ?? []).count - rewrites.count
+  if cleared > 0 { e.captionRewrites = rewrites.isEmpty ? nil : rewrites }
   var info: [String: JSON] = ["created": .string(n.id)]
   if !gone.isEmpty { info["replaced"] = .array(gone.map { .string($0) }) }
+  if cleared > 0 { info["captionRewritesCleared"] = .number(Double(cleared)) }
   return OpResult(edl: e, info: info)
 }
 

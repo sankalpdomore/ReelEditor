@@ -29,6 +29,9 @@ struct WordView: Identifiable { let id: Int; let text: String; let s: Double?; l
   var takeEnd = false // the last word under the take in its paragraph, where the transcript shows the take's words
 }
 
+// A word of a new take at the playhead: the take's overlay id and the word's place among its words.
+struct TakeWord: Equatable { let overlay: String; let index: Int }
+
 // Record new audio (Sankalp, 21 Nov 2026): the words picked, edit seconds, while the recording card is open.
 struct RetakeRequest: Identifiable, Equatable { let id = UUID(); let start: Double; let end: Double; let words: String }
 // A paragraph of the transcript, in the order the reel plays: a section heading when one starts there, its words, and the
@@ -50,6 +53,7 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
   @Published private(set) var overlayPeaks: [String: [Float]] = [:] // the waveform of each audio overlay file
   @Published var prompt: NamePrompt? = nil
   @Published private(set) var currentWord: Int? = nil
+  @Published private(set) var currentTake: TakeWord? = nil // the take playing and its word at the playhead (-1 between words)
   @Published var selection: ReelCore.Range? = nil // edit time
   @Published var selectedWords: ClosedRange<Int>? = nil
   @Published var selectedAnimation: String? = nil
@@ -380,7 +384,14 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
     let t = editOf(plan, out * speed)
     clock.time = t
     clock.playing = player.rate != 0
-    let w = words.filter { !$0.cut && ($0.s ?? .infinity) <= t + 0.01 }.max { ($0.s ?? 0) < ($1.s ?? 0) }
+    // Inside a new take the take's own word is lit, in its green band, and none of the words it replaces (Sankalp, 21 Nov 2026).
+    var take: TakeWord? = nil
+    if let tk = loaded.project.edits.audioOverlays?.first(where: { $0.isTake && t >= $0.start && t < $0.editEnd }) {
+      let ws = extraWords.filter { $0.from == tk.id }
+      take = ws.lastIndex { $0.s <= t + 0.01 }.flatMap { ws[$0].e + 0.6 >= t ? TakeWord(overlay: tk.id, index: $0) : nil } ?? TakeWord(overlay: tk.id, index: -1)
+    }
+    if take != currentTake { currentTake = take }
+    let w = take != nil ? nil : words.filter { !$0.cut && $0.take == nil && ($0.s ?? .infinity) <= t + 0.01 }.max { ($0.s ?? 0) < ($1.s ?? 0) }
     let cw = w.flatMap { ($0.e ?? 0) + 0.6 >= t ? $0.id : nil }
     if cw != currentWord { currentWord = cw }
   }

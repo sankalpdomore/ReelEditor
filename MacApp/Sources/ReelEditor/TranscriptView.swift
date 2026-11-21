@@ -289,9 +289,26 @@ struct TranscriptParagraph: View {
             ForEach(model.wordsOf(p)) { w in
               WordChip(model: model, w: w, frames: frames)
               // What the captions say over the words before it, after the last of them (Edit caption, Sankalp, 15 Nov 2026).
-              if w.captionEnd, let text = w.caption, !w.cut { CaptionTag(model: model, text: text, words: model.wordsOf(p).filter { $0.captionId == w.captionId }.map(\.id)) }
+              // Word by word, so a long one wraps with the transcript.
+              if w.captionEnd, let text = w.caption, !w.cut {
+                let ids = model.wordsOf(p).filter { $0.captionId == w.captionId }.map(\.id)
+                let parts = text.split(whereSeparator: \.isWhitespace)
+                ForEach(Array(parts.enumerated()), id: \.offset) { k, t in
+                  WordTag(model: model, text: String(t), icon: k == 0 ? "pencil-simple" : nil, color: Ink.focus, first: k == 0, last: k == parts.count - 1, words: ids,
+                          help: "The captions say this in place of the words before it, the sound is untouched. Click to select those words and Edit caption to change it")
+                }
+              }
               // What the new take says over the words before it (Record new audio, Sankalp, 21 Nov 2026).
-              if w.takeEnd, let id = w.take { TakeTag(model: model, overlay: id, words: model.wordsOf(p).filter { $0.take == id }.map(\.id)) }
+              if w.takeEnd, let id = w.take {
+                let ids = model.wordsOf(p).filter { $0.take == id }.map(\.id)
+                let said = model.extraWords.filter { $0.from == id }.map(\.w)
+                let parts = said.isEmpty ? ["New take"] : said
+                ForEach(Array(parts.enumerated()), id: \.offset) { k, t in
+                  WordTag(model: model, text: t, icon: k == 0 ? "microphone" : nil, color: Ink.green, italic: said.isEmpty, first: k == 0, last: k == parts.count - 1,
+                          current: !said.isEmpty && model.currentTake == TakeWord(overlay: id, index: k), words: ids,
+                          help: said.isEmpty ? "A new take, its words still being transcribed" : "A new take is heard here in place of the video's sound. Click to select those words and record them again, or Undo to take it off")
+                }
+              }
             }
           }
           .shimmer(shimmer)
@@ -351,54 +368,42 @@ struct WordChip: View {
   }
 }
 
-// The words the captions say in place of the spoken words before it, a caption rewrite (edit_caption): in blue after the
-// last of them, with a pencil. A click selects those words, so Edit caption in the menu changes or takes it away.
-struct CaptionTag: View {
+// A word of what the captions say in place of the spoken words before it (a caption rewrite, edit_caption, in blue with a
+// pencil on its first word) or of what a new take says there (Record new audio, in green with a microphone). One tag a
+// word, so a long one wraps with the transcript (Sankalp, 21 Nov 2026). A click selects the words it stands for, so the
+// selection menu changes it or records them again.
+struct WordTag: View {
   @ObservedObject var model: EditorModel
   let text: String
+  var icon: String? = nil
+  let color: Color
+  var italic = false
+  var first = true
+  var last = true
+  var current = false // the take's word at the playhead, white on black like a word of the transcript
   let words: [Int]
+  let help: String
   @State private var hover = false
 
   var body: some View {
+    // The tags of one fix or take join into one band, its box reaching over the gap to the next word and rounded only at
+    // the band's two ends.
+    let r: CGFloat = 4
     HStack(spacing: 4) {
-      Icon("pencil-simple", size: 12)
-      Text(text).font(.inter(TRANSCRIPT_SIZE))
+      if let icon { Icon(icon, size: 12) }
+      Text(text).font(.inter(TRANSCRIPT_SIZE, italic: italic))
     }
-    .foregroundStyle(Ink.focus)
-    .padding(.horizontal, 6).padding(.vertical, 1)
-    .background(RoundedRectangle(cornerRadius: 4).fill(Ink.focus.opacity(hover ? 0.16 : 0.08)))
+    .foregroundStyle(current ? Ink.onPrimary : color)
+    .padding(.horizontal, TRANSCRIPT_WORD_PAD + 1).padding(.vertical, 1)
+    .background(
+      UnevenRoundedRectangle(topLeadingRadius: first ? r : 0, bottomLeadingRadius: first ? r : 0, bottomTrailingRadius: last ? r : 0, topTrailingRadius: last ? r : 0)
+        .fill(color.opacity(hover ? 0.16 : 0.08))
+        .padding(.trailing, last ? 0 : -TRANSCRIPT_WORD_GAP)
+    )
+    .background { if current { RoundedRectangle(cornerRadius: r).fill(Ink.strong) } }
     .contentShape(Rectangle())
     .onHover { hover = $0 }
-    .help("The captions say this in place of the words before it, the sound is untouched. Click to select those words and Edit caption to change it")
-    .onTapGesture {
-      guard !model.claudeEditing, let a = words.min(), let b = words.max() else { return }
-      model.selectedWords = a...b
-      model.selection = nil
-      if let s = model.words[a].s { model.seek(s) }
-    }
-  }
-}
-
-// The words a new take says, in place of the words before it (Record new audio): in green after the last of them, with a
-// microphone, or Transcribing while its words are found. A click selects those words, so the menu records them again.
-struct TakeTag: View {
-  @ObservedObject var model: EditorModel
-  let overlay: String
-  let words: [Int]
-  @State private var hover = false
-
-  var body: some View {
-    let said = model.extraWords.filter { $0.from == overlay }.map(\.w).joined(separator: " ")
-    HStack(spacing: 4) {
-      Icon("microphone", size: 12)
-      Text(said.isEmpty ? "New take" : said).font(.inter(TRANSCRIPT_SIZE, italic: said.isEmpty))
-    }
-    .foregroundStyle(Ink.green)
-    .padding(.horizontal, 6).padding(.vertical, 1)
-    .background(RoundedRectangle(cornerRadius: 4).fill(Ink.green.opacity(hover ? 0.16 : 0.08)))
-    .contentShape(Rectangle())
-    .onHover { hover = $0 }
-    .help(said.isEmpty ? "A new take, its words still being transcribed" : "A new take is heard here in place of the video's sound. Click to select those words and record them again, or Undo to take it off")
+    .help(help)
     .onTapGesture {
       guard !model.claudeEditing, let a = words.min(), let b = words.max() else { return }
       model.selectedWords = a...b
