@@ -381,7 +381,7 @@ let coreTools: [ReelTool] = [
   ReelTool(name: "delete_audio_overlay", description: "Takes an audio overlay off the project. The file is not deleted. Undoable.", inputSchema: obj(["project": projectArg, "id": ["type": "string", "pattern": "^o[0-9]{1,3}$"]], ["project", "id"])) { i in
     try edit(i, "delete_audio_overlay") { e, _, m in e = try deleteAudioOverlay(e, m, i["id"]!.string!).edl; return [:] }
   },
-  ReelTool(name: "replace_audio", description: "Record new audio: lays a new recording of some words over them when the picture is right but the sound is not clear. The take (path) is trimmed to its speech, its tone and loudness matched to the voice just before and after the words, the room's own background laid under it, and sped up a little (at most 1.2x, pitch kept) when it runs past the next word. The clips' own sound is silent under it with short fades, and the captions there say the take's words, transcribed in the background (or placed from script, the exact words said). A take already over those words is replaced, and the caption rewrites inside it are taken off (captionRewritesCleared). Undoable; delete_audio_overlay takes it off. Returns the take's overlay id (created) and what was matched: gainDb, toneDb (bands moved by 1 dB or more), roomTone, rate, overrun (seconds it still runs into the next word).", inputSchema: obj([
+  ReelTool(name: "replace_audio", description: "Record new audio: lays a new recording of some words over them when the picture is right but the sound is not clear. The take (path) is trimmed to its speech, its tone and loudness matched to the voice just before and after the words, the room's own background laid under it, and sped up a little (at most 1.2x, pitch kept) when it runs past the next word. The clips' own sound is silent under it with short fades, and the captions there say the take's words, transcribed in the background (or placed from script, the exact words said). A take never goes over another: with one there it refuses (take_there), so take that one off with delete_audio_overlay first. The caption rewrites inside the new take are taken off (captionRewritesCleared); edit_caption over the take's own words changes its captions. Undoable; delete_audio_overlay takes it off. Returns the take's overlay id (created) and what was matched: gainDb, toneDb (bands moved by 1 dB or more), roomTone, rate, overrun (seconds it still runs into the next word).", inputSchema: obj([
     "project": projectArg,
     "path": ["type": "string", "minLength": 1, "maxLength": 2048, "description": "The recording: an audio file (wav, m4a, aiff, mp3) or a video whose sound to use."],
     "start": sec("Edit time where the words start."), "end": sec("Edit time where they end."),
@@ -394,7 +394,11 @@ let coreTools: [ReelTool] = [
     guard Media.AUDIO_EXTENSIONS.contains(url.pathExtension.lowercased()) else { throw ToolError("invalid_path", "Not an audio file (\(Media.AUDIO_EXTENSIONS.joined(separator: ", ")))") }
     let start = i["start"]!.double!, end = i["end"]!.double!
     guard end > start else { throw ToolError("invalid_range", "end has to be after start") }
-    let placed = try await Retake.place(try Store.load(n), take: url, start: start, end: end)
+    let l = try Store.load(n)
+    if let o = l.project.edits.audioOverlays?.first(where: { $0.isTake && $0.start < end - EPS && $0.editEnd > start + EPS }) {
+      throw ToolError("take_there", "A new take is already over these words (\(o.id)). Take it off with delete_audio_overlay first, then record again")
+    }
+    let placed = try await Retake.place(l, take: url, start: start, end: end)
     var out = try edit(i, "replace_audio") { e, _, m in
       let r = try addTake(e, m, file: placed.file.path, take: url.path, duration: placed.length, start: placed.start, label: "New take")
       e = r.edl; return r.info

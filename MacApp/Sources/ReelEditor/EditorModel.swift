@@ -25,12 +25,11 @@ struct WordView: Identifiable { let id: Int; let text: String; let s: Double?; l
   var caption: String? = nil // what the captions say over this word instead, from a caption rewrite (edit_caption)
   var captionId: String? = nil // that rewrite's id
   var captionEnd = false // the last word of the rewrite in its paragraph, where the transcript shows the caption's words
-  var take: String? = nil // the new take said over this word (Record new audio), its overlay's id
-  var takeEnd = false // the last word under the take in its paragraph, where the transcript shows the take's words
+  var take: String? = nil // a word a new take says over (Record new audio): switched off, its overlay's id
+  var takeOf: String? = nil // a word the new take itself says, its overlay's id
+  var takeFirst = false, takeLast = false // the take's first and last word, the ends of its green band
+  var placeholder = false // New take, standing for the take's words while they are found
 }
-
-// A word of a new take at the playhead: the take's overlay id and the word's place among its words.
-struct TakeWord: Equatable { let overlay: String; let index: Int }
 
 // Record new audio (Sankalp, 21 Nov 2026): the words picked, edit seconds, while the recording card is open.
 struct RetakeRequest: Identifiable, Equatable { let id = UUID(); let start: Double; let end: Double; let words: String }
@@ -53,7 +52,6 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
   @Published private(set) var overlayPeaks: [String: [Float]] = [:] // the waveform of each audio overlay file
   @Published var prompt: NamePrompt? = nil
   @Published private(set) var currentWord: Int? = nil
-  @Published private(set) var currentTake: TakeWord? = nil // the take playing and its word at the playhead (-1 between words)
   @Published var selection: ReelCore.Range? = nil // edit time
   @Published var selectedWords: ClosedRange<Int>? = nil
   @Published var selectedAnimation: String? = nil
@@ -209,20 +207,9 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
       }
       if !ids.isEmpty || p.words.isEmpty { paras.append(Paragraph(id: paras.count, title: p.title, words: ids, clip: p.clip, source: p.source, label: p.label, clipStart: p.clipStart)) }
     }
-    // The caption rewrites over each word, by the word's middle, as the captions lay them in.
-    if let rw = edl.captionRewrites, !rw.isEmpty {
-      for k in all.indices {
-        guard let s = all[k].s, let e = all[k].e else { continue }
-        let m = (s + e) / 2
-        if let r = rw.first(where: { m >= $0.start && m < $0.end }) { all[k].caption = r.text; all[k].captionId = r.id }
-      }
-      for p in paras {
-        for (k, id) in p.words.enumerated() where all[id].captionId != nil {
-          if k == p.words.count - 1 || all[p.words[k + 1]].captionId != all[id].captionId { all[id].captionEnd = true }
-        }
-      }
-    }
-    // The new takes over each word, by the word's middle; a cut word is not under it.
+    // Record new audio (Sankalp, 21 Nov 2026): the words a new take says over are switched off, and the take's own words
+    // take their place in the transcript as words of their own, in green after the last of them, so each can be selected,
+    // its caption edited, cut, and lit by the playhead. A cut word is not under a take.
     let takes = (edl.audioOverlays ?? []).filter(\.isTake)
     if !takes.isEmpty {
       for k in all.indices where !all[k].cut {
@@ -230,9 +217,44 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
         let m = (s + e) / 2
         if let o = takes.first(where: { m >= $0.start && m < $0.editEnd }) { all[k].take = o.id }
       }
+      let spoken = extraEditWords(plan, edl, loaded.extra)
+      var placed = Set<String>()
+      for pi in paras.indices {
+        var ids = paras[pi].words
+        for o in takes where !placed.contains(o.id) {
+          guard let at = ids.lastIndex(where: { all[$0].take == o.id }) else { continue }
+          placed.insert(o.id)
+          let said = spoken.filter { $0.from == o.id }
+          var added: [Int] = []
+          for (k, w) in said.enumerated() {
+            let mid = (w.s + w.e) / 2
+            var v = WordView(id: all.count, text: w.w, s: w.s, e: w.e, cut: plan.cuts.contains { mid >= $0.s && mid < $0.e }, extra: true)
+            v.takeOf = o.id; v.takeFirst = k == 0; v.takeLast = k == said.count - 1
+            added.append(all.count); all.append(v)
+          }
+          // While its words are found, the take is one placeholder word, New take, that selects it all the same.
+          if said.isEmpty {
+            var v = WordView(id: all.count, text: "New take", s: o.start, e: o.editEnd, cut: false, extra: true)
+            v.takeOf = o.id; v.takeFirst = true; v.takeLast = true; v.placeholder = true
+            added.append(all.count); all.append(v)
+          }
+          ids.insert(contentsOf: added, at: at + 1)
+        }
+        paras[pi] = Paragraph(id: paras[pi].id, title: paras[pi].title, words: ids, clip: paras[pi].clip, source: paras[pi].source, label: paras[pi].label, clipStart: paras[pi].clipStart)
+      }
+    }
+    // The caption rewrites over each word, by the word's middle, as the captions lay them in: over a take, its own words.
+    if let rw = edl.captionRewrites, !rw.isEmpty {
+      for k in all.indices where all[k].take == nil && !all[k].placeholder {
+        guard let s = all[k].s, let e = all[k].e else { continue }
+        let m = (s + e) / 2
+        if let r = rw.first(where: { m >= $0.start && m < $0.end }) { all[k].caption = r.text; all[k].captionId = r.id }
+      }
       for p in paras {
-        let live = p.words.filter { all[$0].take != nil }
-        for id in live where live.last(where: { all[$0].take == all[id].take }) == id { all[id].takeEnd = true }
+        let live = p.words.filter { all[$0].take == nil }
+        for (k, id) in live.enumerated() where all[id].captionId != nil {
+          if k == live.count - 1 || all[live[k + 1]].captionId != all[id].captionId { all[id].captionEnd = true }
+        }
       }
     }
     words = all
@@ -384,14 +406,8 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
     let t = editOf(plan, out * speed)
     clock.time = t
     clock.playing = player.rate != 0
-    // Inside a new take the take's own word is lit, in its green band, and none of the words it replaces (Sankalp, 21 Nov 2026).
-    var take: TakeWord? = nil
-    if let tk = loaded.project.edits.audioOverlays?.first(where: { $0.isTake && t >= $0.start && t < $0.editEnd }) {
-      let ws = extraWords.filter { $0.from == tk.id }
-      take = ws.lastIndex { $0.s <= t + 0.01 }.flatMap { ws[$0].e + 0.6 >= t ? TakeWord(overlay: tk.id, index: $0) : nil } ?? TakeWord(overlay: tk.id, index: -1)
-    }
-    if take != currentTake { currentTake = take }
-    let w = take != nil ? nil : words.filter { !$0.cut && $0.take == nil && ($0.s ?? .infinity) <= t + 0.01 }.max { ($0.s ?? 0) < ($1.s ?? 0) }
+    // A word a new take says over is never lit; inside a take its own words are.
+    let w = words.filter { !$0.cut && $0.take == nil && !$0.placeholder && ($0.s ?? .infinity) <= t + 0.01 }.max { ($0.s ?? 0) < ($1.s ?? 0) }
     let cw = w.flatMap { ($0.e ?? 0) + 0.6 >= t ? $0.id : nil }
     if cw != currentWord { currentWord = cw }
   }
@@ -461,6 +477,22 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
 
   // Words of the other videos have no index for delete_words, so a selection with any of them is cut by its times.
   var selectionHasExtra: Bool { selectedWords.map { $0.upperBound >= mainWordCount } ?? false }
+
+  // The kind of a word, for a selection to stay among one kind: the project's own video's, another video's, or a take's.
+  // A word a new take says over is switched off and has none: it is never selected.
+  func kind(_ id: Int) -> String? {
+    guard words.indices.contains(id) else { return nil }
+    let w = words[id]
+    if w.take != nil { return nil }
+    if let t = w.takeOf { return "take:" + t }
+    return id < mainWordCount ? "main" : "other"
+  }
+
+  // The new takes a selection is in.
+  var selectedTakes: [String] {
+    guard let r = selectedWords else { return [] }
+    return Array(Set(words[r].compactMap { $0.takeOf ?? $0.take })).sorted()
+  }
   func cutSelection() {
     if let r = selectedWords, selectionHasExtra { if let (a, b) = selectedWordRange { run("cut_range", ["start": .number(a), "end": .number(b)]) }; selectedWords = nil }
     else if let r = selectedWords { run("delete_words", ["indexes": .array(r.map { .number(Double($0)) })]); selectedWords = nil }

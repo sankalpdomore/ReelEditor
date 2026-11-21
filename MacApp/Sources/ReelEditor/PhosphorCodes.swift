@@ -67,6 +67,7 @@ enum PhosphorCodes {
     "magic-wand": 0xe6b6,
     "magnifying-glass": 0xe30c,
     "microphone": 0xe326,
+    "microphone-slash": 0xe328,
     "minus": 0xe32a,
     "navigation-arrow": 0xeade,
     "note": 0xe348,

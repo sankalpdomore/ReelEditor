@@ -291,8 +291,12 @@ public enum Retake {
 
     // The stretch the clips' sound gives way over: from just after the word before to past the last word picked and the
     // take, and never past the reel.
-    let oa = max(0, min(placeAt, max(prevEnd ?? 0, oS - 0.12)))
-    let ob = min(plan.duration, max(takeEnd, max(oE, min(oE + 0.12, limit))))
+    // A take beside another stops at its edge: takes never overlap.
+    let near = takeRanges(plan, edl).map(\.range)
+    let before = near.filter { $0.e <= oS + 0.05 }.map(\.e).max() ?? 0
+    let after = near.filter { $0.s >= oE - 0.05 }.map(\.s).min() ?? plan.duration
+    let oa = max(0, before, min(placeAt, max(prevEnd ?? 0, oS - 0.12)))
+    let ob = min(plan.duration, after, max(takeEnd, max(oE, min(oE + 0.12, limit))))
     let n = Int((ob - oa) * RATE)
 
     // 4. The room under it, at the level the take's own background lacks.
@@ -307,7 +311,7 @@ public enum Retake {
     fade(&x, at: 0, length: Int(0.01 * RATE), in: true)
     fade(&x, at: x.count - Int(0.01 * RATE), length: Int(0.01 * RATE), in: false)
     let offset = Int((placeAt - oa) * RATE)
-    for i in 0..<x.count where offset + i < n { bed[offset + i] += x[i] }
+    for i in 0..<x.count where offset + i >= 0 && offset + i < n { bed[offset + i] += x[i] }
     let tf = Int(TAKE_FADE * RATE)
     fade(&bed, at: 0, length: tf, in: true)
     fade(&bed, at: n - tf, length: tf, in: false)

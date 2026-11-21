@@ -227,9 +227,10 @@ struct RetakeCard: View {
         Button { stop() } label: { IconLabel("Stop", icon: "stop", size: 14) }.pill(.destructive, .md).keyboardShortcut(.defaultAction)
       case .matching:
         EmptyView()
-      case .done:
+      case .done(let r):
         Button { model.playFrom(request.start) } label: { IconLabel("Listen", icon: "play", size: 14) }.pill(.outline, .md)
-        Button { model.stopPlaying(); stage = .ready } label: { IconLabel("Record again", icon: "arrow-counter-clockwise", size: 14) }.pill(.outline, .md)
+        // The take just made comes off first: a take never goes over another.
+        Button { recordAgain(r) } label: { IconLabel("Record again", icon: "arrow-counter-clockwise", size: 14) }.pill(.outline, .md)
         Button("Done") { close() }.pill(.primary, .md).keyboardShortcut(.defaultAction)
       case .failed:
         Button("Close") { close() }.pill(.ghost, .md)
@@ -258,6 +259,12 @@ struct RetakeCard: View {
   }
 
   func stop() { model.stopPlaying(); mic.stop() }
+
+  func recordAgain(_ r: JSON) {
+    model.stopPlaying()
+    guard let id = r["created"]?.string else { stage = .ready; return }
+    model.run("delete_audio_overlay", ["id": .string(id)]) { _ in stage = .ready }
+  }
 
   func finish(_ url: URL?) {
     guard let url else { stage = .failed(mic.problem ?? "The recording was not saved"); return }

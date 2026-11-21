@@ -53,6 +53,8 @@ let TRANSCRIPT_WORD_GAP: CGFloat = 2
 struct TranscriptView: View {
   @ObservedObject var model: EditorModel
   @State private var frames = WordFrames()
+  @State private var paneWidth: CGFloat = 10_000 // the width the words are laid out in, for the selection menu to fit
+  @State private var menuWidth: CGFloat = 0
 
   var body: some View {
     // With no words at all, the clips are still listed in the order they play, each with its video's name and place in
@@ -103,12 +105,14 @@ struct TranscriptView: View {
             ExtraTranscript(model: model)
           }
           .coordinateSpace(.named("words"))
+          .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { paneWidth = $0 }
           // Drag across words to select them, as in the web editor; the menu then floats above the first one.
           .simultaneousGesture(DragGesture(minimumDistance: 4, coordinateSpace: .named("words")).onChanged { g in
             guard !model.claudeEditing else { return } // nothing is selected while Claude edits (Sankalp, 2 Nov 2026)
-            guard let a = wordAt(g.startLocation), var b = wordAt(g.location) else { return }
-            // A selection stays among one kind of word: the project's own video's, or another video's.
-            if (a >= model.mainWordCount) != (b >= model.mainWordCount) { b = a }
+            guard let a = wordAt(g.startLocation), var b = wordAt(g.location), model.kind(a) != nil else { return }
+            // A selection stays among one kind of word: the project's own video's, another video's, or a take's; a word
+            // a new take says over is never selected.
+            if model.kind(a) != model.kind(b) { b = a }
             model.selection = nil
             model.selectedWords = min(a, b)...max(a, b)
           })
@@ -192,12 +196,17 @@ extension TranscriptView {
       SelectionMenu(canCut: sel.contains { !$0.cut }, canUncut: sel.contains { $0.cut }, words: shownCaption(r),
         cut: { model.cutSelection() }, uncut: { model.restoreSelection() },
         correct: { text in editCaption(r, text) },
-        record: sel.contains(where: { !$0.cut }) ? {
+        // No take over a take (Sankalp, 21 Nov 2026): to record again, Remove new audio first.
+        record: sel.contains(where: { !$0.cut }) && model.selectedTakes.isEmpty ? {
           guard let (a, b) = model.selectedWordRange else { return }
           let said = sel.filter { !$0.cut }.map(\.text).joined(separator: " ")
           model.selectedWords = nil
           withAnimation(.cardOpen) { model.retake = RetakeRequest(start: a, end: b, words: said) }
         } : nil,
+        removeTake: model.selectedTakes.isEmpty ? nil : {
+          for id in model.selectedTakes { model.run("delete_audio_overlay", ["id": .string(id)]) }
+          model.selectedWords = nil
+        },
         comment: { t in
           // Saved on the reel, and sent to the chat's Claude at once (Sankalp, 2 Nov 2026).
           let on = "\"\(sel.map(\.text).joined(separator: " "))\" (words \(r.lowerBound) to \(r.upperBound), at \(timecode(sel.first?.s ?? 0).components(separatedBy: ".")[0]))"
@@ -207,8 +216,10 @@ extension TranscriptView {
           model.run("add_comment", args) { res in
             DirectChat.shared.sendComment(t, on: on, id: res["comment"]?["id"]?.string)
           }
-        })
-        .offset(x: max(0, first.minX - 8), y: y)
+        }, maxWidth: paneWidth)
+        // Kept inside the transcript: moved left when it would run past its right edge.
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { menuWidth = $0 }
+        .offset(x: max(0, min(first.minX - 8, paneWidth - menuWidth)), y: y)
         .id("\(r.lowerBound)-\(r.upperBound)")
     }
   }
@@ -298,17 +309,6 @@ struct TranscriptParagraph: View {
                           help: "The captions say this in place of the words before it, the sound is untouched. Click to select those words and Edit caption to change it")
                 }
               }
-              // What the new take says over the words before it (Record new audio, Sankalp, 21 Nov 2026).
-              if w.takeEnd, let id = w.take {
-                let ids = model.wordsOf(p).filter { $0.take == id }.map(\.id)
-                let said = model.extraWords.filter { $0.from == id }.map(\.w)
-                let parts = said.isEmpty ? ["New take"] : said
-                ForEach(Array(parts.enumerated()), id: \.offset) { k, t in
-                  WordTag(model: model, text: t, icon: k == 0 ? "microphone" : nil, color: Ink.green, italic: said.isEmpty, first: k == 0, last: k == parts.count - 1,
-                          current: !said.isEmpty && model.currentTake == TakeWord(overlay: id, index: k), words: ids,
-                          help: said.isEmpty ? "A new take, its words still being transcribed" : "A new take is heard here in place of the video's sound. Click to select those words and record them again, or Undo to take it off")
-                }
-              }
             }
           }
           .shimmer(shimmer)
@@ -340,24 +340,41 @@ struct WordChip: View {
     let selected = model.selectedWords?.contains(w.id) == true
     // The word at the playhead in white on black, so it stands out as the video plays (Sankalp, 2 Nov 2026).
     let current = model.currentWord == w.id && !selected
-    Text(w.text)
-      .font(.inter(TRANSCRIPT_SIZE))
+    let off = w.take != nil // a word a new take says over: switched off, its sound and caption the take's
+    let isTake = w.takeOf != nil // a word the new take says, in green
+    HStack(spacing: 4) {
+      if isTake && w.takeFirst { Icon("microphone", size: 12) }
+      Text(w.text).font(.inter(TRANSCRIPT_SIZE, italic: w.placeholder))
+    }
       // A cut word keeps its red or amber strike but is faded, with no box behind it, so the kept words are what reads
       // (Sankalp, 4 Nov 2026).
       .strikethrough(w.cut, color: (w.pending ? Ink.amber : Ink.red).opacity(0.5))
-      // A word the captions say otherwise (Edit caption) is underlined with blue dots, a word a new take says again with
-      // green ones.
-      .underline((w.caption != nil || w.take != nil) && !w.cut, pattern: .dot, color: w.take != nil ? Ink.green : Ink.focus)
-      .foregroundStyle(current ? Ink.onPrimary : w.pending ? Ink.amber.opacity(0.45) : w.cut ? Ink.ghost.opacity(0.7) : w.caption != nil || w.take != nil ? Ink.faint : Ink.text)
-      .padding(.horizontal, TRANSCRIPT_WORD_PAD)
-      .background(RoundedRectangle(cornerRadius: 4).fill(selected ? Ink.select : current ? Ink.strong : hover ? Ink.sunken : .clear))
-      .help(w.pending ? "Cut from the chat, waiting for your approval" : w.take != nil ? "A new take is heard here in place of the video's sound. Select the words to record again" : w.caption.map { "The captions say \"\($0)\" here, the sound is untouched. Select the words and Edit caption to change it" } ?? "")
+      // A word the captions say otherwise (Edit caption) is underlined with blue dots.
+      .underline(w.caption != nil && !w.cut, pattern: .dot, color: Ink.focus)
+      .foregroundStyle(current ? Ink.onPrimary : w.pending ? Ink.amber.opacity(0.45) : w.cut ? Ink.ghost.opacity(0.7) : off ? Ink.ghost
+                       : w.caption != nil ? Ink.faint : isTake ? Ink.green : Ink.text)
+      .padding(.horizontal, TRANSCRIPT_WORD_PAD + (isTake ? 1 : 0))
+      .background(RoundedRectangle(cornerRadius: 4).fill(selected ? Ink.select : current ? Ink.strong : hover && !off ? Ink.sunken : .clear))
+      // A take's words sit on one green band, reaching over the gap between them and rounded at its two ends.
+      .background {
+        if isTake {
+          UnevenRoundedRectangle(topLeadingRadius: w.takeFirst ? 4 : 0, bottomLeadingRadius: w.takeFirst ? 4 : 0, bottomTrailingRadius: w.takeLast ? 4 : 0, topTrailingRadius: w.takeLast ? 4 : 0)
+            .fill(Ink.green.opacity(0.1))
+            .padding(.trailing, w.takeLast ? 0 : -TRANSCRIPT_WORD_GAP)
+        }
+      }
+      .help(w.pending ? "Cut from the chat, waiting for your approval"
+            : off ? "Switched off: the new take is heard here instead, with its own captions. Select its green words to edit their captions, or Remove new audio to bring these back"
+            : w.placeholder ? "A new take, its words still being transcribed"
+            : isTake ? "A word of the new take. Select it to edit its caption, or Remove new audio to take the take off"
+            : w.caption.map { "The captions say \"\($0)\" here, the sound is untouched. Select the words and Edit caption to change it" } ?? "")
       .onHover { hover = $0 }
       .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("words")) }) { [frames, id = w.id] r in frames.rects[id] = r }
       .onTapGesture {
         // While Claude edits a click only moves the playhead: no selection, so no Cut or Comment (Sankalp, 2 Nov 2026).
-        if model.claudeEditing { if let s = w.s { model.seek(s) }; return }
-        if NSEvent.modifierFlags.contains(.shift), let r = model.selectedWords {
+        if model.claudeEditing || off { if let s = w.s { model.seek(s) }; return }
+        // A selection stays among one kind of word, a take's words among themselves.
+        if NSEvent.modifierFlags.contains(.shift), let r = model.selectedWords, model.kind(r.lowerBound) == model.kind(w.id) {
           model.selectedWords = min(r.lowerBound, w.id)...max(r.upperBound, w.id)
         } else {
           model.selectedWords = w.id...w.id
@@ -368,10 +385,9 @@ struct WordChip: View {
   }
 }
 
-// A word of what the captions say in place of the spoken words before it (a caption rewrite, edit_caption, in blue with a
-// pencil on its first word) or of what a new take says there (Record new audio, in green with a microphone). One tag a
-// word, so a long one wraps with the transcript (Sankalp, 21 Nov 2026). A click selects the words it stands for, so the
-// selection menu changes it or records them again.
+// A word of what the captions say in place of the spoken words before it (a caption rewrite, edit_caption), in blue with a
+// pencil on its first word. One tag a word, so a long one wraps with the transcript (Sankalp, 21 Nov 2026). A click
+// selects the words it stands for, so Edit caption changes it.
 struct WordTag: View {
   @ObservedObject var model: EditorModel
   let text: String
@@ -380,7 +396,6 @@ struct WordTag: View {
   var italic = false
   var first = true
   var last = true
-  var current = false // the take's word at the playhead, white on black like a word of the transcript
   let words: [Int]
   let help: String
   @State private var hover = false
@@ -393,14 +408,13 @@ struct WordTag: View {
       if let icon { Icon(icon, size: 12) }
       Text(text).font(.inter(TRANSCRIPT_SIZE, italic: italic))
     }
-    .foregroundStyle(current ? Ink.onPrimary : color)
+    .foregroundStyle(color)
     .padding(.horizontal, TRANSCRIPT_WORD_PAD + 1).padding(.vertical, 1)
     .background(
       UnevenRoundedRectangle(topLeadingRadius: first ? r : 0, bottomLeadingRadius: first ? r : 0, bottomTrailingRadius: last ? r : 0, topTrailingRadius: last ? r : 0)
         .fill(color.opacity(hover ? 0.16 : 0.08))
         .padding(.trailing, last ? 0 : -TRANSCRIPT_WORD_GAP)
     )
-    .background { if current { RoundedRectangle(cornerRadius: r).fill(Ink.strong) } }
     .contentShape(Rectangle())
     .onHover { hover = $0 }
     .help(help)

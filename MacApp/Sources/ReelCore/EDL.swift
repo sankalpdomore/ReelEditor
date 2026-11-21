@@ -740,25 +740,24 @@ public func addAudioOverlay(_ edl: Edl, _ main: EdlMain, file: String, duration:
   return OpResult(edl: e, info: ["created": .string(o.id)])
 }
 
-// Lays a new take (Retake.swift) over the reel: the takes it overlaps are taken off, so recording again over the same words
-// leaves one take there. Returns the new take's id (created) and the ids it took off (replaced).
+// Lays a new take (Retake.swift) over the reel. A take never goes over another (Sankalp, 21 Nov 2026): to record again,
+// the take there comes off first (delete_audio_overlay), so there is never more than one layer of new sound. The caption
+// rewrites inside it, made for the words said before, are taken off. Returns the new take's id (created).
 public func addTake(_ edl: Edl, _ main: EdlMain, file: String, take: String, duration: Double, start: Double, label: String) throws -> OpResult {
-  let o = AudioOverlay(id: "", file: file, label: label, start: round3(start), inn: 0, out: round3(duration), gain: 1, duration: round3(duration),
+  var o = AudioOverlay(id: "", file: file, label: label, start: round3(start), inn: 0, out: round3(duration), gain: 1, duration: round3(duration),
                        window: nil, origin: take)
   try checkOverlay(o)
-  let gone = (edl.audioOverlays ?? []).filter { $0.isTake && $0.start < o.editEnd - EPS && $0.editEnd > o.start + EPS }.map(\.id)
+  let there = (edl.audioOverlays ?? []).filter { $0.isTake && $0.start < o.editEnd - EPS && $0.editEnd > o.start + EPS }.map(\.id)
+  if !there.isEmpty { throw EdlError("take_there", "A new take is already over these words (\(there.joined(separator: ", "))). Take it off with delete_audio_overlay first, then record again") }
   // The caption rewrites inside it were made for the words said before; the take's own words are captioned now.
   let rewrites = (edl.captionRewrites ?? []).filter { let m = ($0.start + $0.end) / 2; return m < o.start || m >= o.editEnd }
-  var rest = (edl.audioOverlays ?? []).filter { !gone.contains($0.id) }
-  var n = AudioOverlay(id: nextId("o", rest.map(\.id) + gone), file: file, label: String(label.prefix(80)), start: o.start, inn: 0, out: o.out, gain: 1, duration: o.duration, window: nil, origin: take)
-  n.replaces = true; n.take = take
-  rest.append(n)
+  o.id = nextId("o", (edl.audioOverlays ?? []).map(\.id))
+  o.label = String(label.prefix(80)); o.replaces = true; o.take = take
   var e = edl
-  e.audioOverlays = rest.sorted { $0.start < $1.start }
+  e.audioOverlays = ((edl.audioOverlays ?? []) + [o]).sorted { $0.start < $1.start }
   let cleared = (edl.captionRewrites ?? []).count - rewrites.count
   if cleared > 0 { e.captionRewrites = rewrites.isEmpty ? nil : rewrites }
-  var info: [String: JSON] = ["created": .string(n.id)]
-  if !gone.isEmpty { info["replaced"] = .array(gone.map { .string($0) }) }
+  var info: [String: JSON] = ["created": .string(o.id)]
   if cleared > 0 { info["captionRewritesCleared"] = .number(Double(cleared)) }
   return OpResult(edl: e, info: info)
 }

@@ -579,24 +579,24 @@ struct SelectionMenu: View {
   let uncut: () -> Void
   var correct: (String) -> String? = { _ in nil } // the new caption; returns the error to show, or nil when it was saved
   var record: (() -> Void)? = nil // Record new audio over the words picked
+  var removeTake: (() -> Void)? = nil // Remove new audio: the take the words are in, the video's sound and words back
   let comment: (String) -> Void
+  var maxWidth: CGFloat? = nil // the room it has: narrower than its buttons with their labels, it shows their icons only
   @State private var mode = Mode.buttons
   @State private var text = ""
   @State private var problem: String? = nil
+  @State private var fullWidth: CGFloat = 0
   @FocusState private var typing: Bool
 
   var body: some View {
     Group {
       switch mode {
       case .buttons:
-        HStack(spacing: 4) {
-          if canCut { Button(action: cut) { IconLabel("Cut", icon: "scissors", size: 14) }.pill(.outline, .sm) }
-          if canUncut { Button(action: uncut) { IconLabel("Uncut", icon: "arrow-counter-clockwise", size: 14) }.pill(.outline, .sm) }
-          if let words { Button { text = words; problem = nil; mode = .correct } label: { IconLabel("Edit caption", icon: "pencil-simple", size: 14) }.pill(.outline, .sm)
-            .help("Change what the captions say here: fix, merge or rephrase the words. The sound stays as it is") }
-          if let record { Button(action: record) { IconLabel("Record new audio", icon: "microphone", size: 14) }.pill(.outline, .sm)
-            .help("Say these words again into any microphone. The take is matched to the voice around them and laid over them, the picture untouched") }
-          Button { text = ""; mode = .comment } label: { IconLabel("Comment for Claude", icon: "chat-text", size: 14) }.pill(.outline, .sm)
+        // The labels go when the transcript is too narrow for them, the icons stay with their help (Sankalp, 21 Nov 2026).
+        let labels = fullWidth == 0 || maxWidth.map { fullWidth + 8 <= $0 } ?? true
+        row(labels)
+        .background(alignment: .leading) {
+          row(true).fixedSize().hidden().onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { fullWidth = $0 }
         }
         .padding(4)
         .background(Capsule().fill(Ink.page))
@@ -643,6 +643,22 @@ struct SelectionMenu: View {
 
   func save() {
     if let p = correct(text) { problem = p } else { mode = .buttons }
+  }
+
+  // The buttons, with their labels or as icons with the label in their help.
+  func row(_ labels: Bool) -> some View {
+    func item(_ title: String, _ icon: String, _ help: String, _ action: @escaping () -> Void) -> some View {
+      Button(action: action) { if labels { IconLabel(title, icon: icon, size: 14) } else { Icon(icon, size: 14).frame(width: 16) } }
+        .pill(.outline, .sm).help(labels ? help : title + ". " + help)
+    }
+    return HStack(spacing: 4) {
+      if canCut { item("Cut", "scissors", "Cut these words from the reel", cut) }
+      if canUncut { item("Uncut", "arrow-counter-clockwise", "Bring these words back", uncut) }
+      if let words { item("Edit caption", "pencil-simple", "Change what the captions say here: fix, merge or rephrase the words. The sound stays as it is") { text = words; problem = nil; mode = .correct } }
+      if let record { item("Record new audio", "microphone", "Say these words again into any microphone. The take is matched to the voice around them and laid over them, the picture untouched", record) }
+      if let removeTake { item("Remove new audio", "microphone-slash", "Take this new take off, so the video's own sound and words come back. Then Record new audio to record again", removeTake) }
+      item("Comment for Claude", "chat-text", "Leave Claude a note on these words") { text = ""; mode = .comment }
+    }
   }
 }
 
