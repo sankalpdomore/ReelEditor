@@ -578,6 +578,7 @@ struct SelectionMenu: View {
   let cut: () -> Void
   let uncut: () -> Void
   var correct: (String) -> String? = { _ in nil } // the new caption; returns the error to show, or nil when it was saved
+  var record: (() -> Void)? = nil // Record new audio over the words picked
   let comment: (String) -> Void
   @State private var mode = Mode.buttons
   @State private var text = ""
@@ -593,6 +594,8 @@ struct SelectionMenu: View {
           if canUncut { Button(action: uncut) { IconLabel("Uncut", icon: "arrow-counter-clockwise", size: 14) }.pill(.outline, .sm) }
           if let words { Button { text = words; problem = nil; mode = .correct } label: { IconLabel("Edit caption", icon: "pencil-simple", size: 14) }.pill(.outline, .sm)
             .help("Change what the captions say here: fix, merge or rephrase the words. The sound stays as it is") }
+          if let record { Button(action: record) { IconLabel("Record new audio", icon: "microphone", size: 14) }.pill(.outline, .sm)
+            .help("Say these words again into any microphone. The take is matched to the voice around them and laid over them, the picture untouched") }
           Button { text = ""; mode = .comment } label: { IconLabel("Comment for Claude", icon: "chat-text", size: 14) }.pill(.outline, .sm)
         }
         .padding(4)

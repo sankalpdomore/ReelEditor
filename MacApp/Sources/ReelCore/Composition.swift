@@ -38,6 +38,7 @@ public final class ReelComposition: @unchecked Sendable {
 private let TS: CMTimeScale = 600
 private func ct(_ s: Double) -> CMTime { CMTime(seconds: s, preferredTimescale: TS) }
 private let JOIN_FADE = 0.015
+let TAKE_FADE = 0.02 // the clips' own sound fades out and in this long at a new take's edges, the take's own edges too
 
 public enum Compose {
   public static func speedOf(_ edl: Edl) -> Double { let s = edl.export.speed ?? 1; return s >= 0.1 && s <= 4 ? s : 1 }
@@ -195,13 +196,24 @@ public enum Compose {
     if let aTrack {
       let params = AudioFX.input(aTrack, gain: voiceGain, eqs: voiceEq)
       let level: Float = params.audioTapProcessor != nil ? 1 : Float(min(1, voiceGain))
+      // Ramps in output seconds before the speed: a short fade at every join, and the clips' own sound faded out under each
+      // new take and back in after it (Record new audio, 21 Nov 2026), a join's fades left out where a take is.
+      var ramps: [(s: Double, d: Double, from: Float, to: Float)] = []
+      let takes = mergeRanges(takeRanges(plan, edl).map(\.range))
+      let tf = TAKE_FADE
+      for t in takes where t.e - t.s > 3 * tf {
+        ramps += [(t.s, tf, level, 0), (t.s + tf, t.e - t.s - 2 * tf, 0, 0), (t.e - tf, tf, 0, level)]
+      }
       if placed.count > 1 {
-        let fade = ct(JOIN_FADE / speed)
         for p in placed where p.duration.seconds > 0.1 {
-          let a = sc(p.start), b = sc(p.start + p.duration)
-          params.setVolumeRamp(fromStartVolume: 0, toEndVolume: level, timeRange: CMTimeRange(start: a, duration: fade))
-          params.setVolumeRamp(fromStartVolume: level, toEndVolume: 0, timeRange: CMTimeRange(start: b - fade, duration: fade))
+          let a = p.start.seconds, b = (p.start + p.duration).seconds
+          for r in [(a, JOIN_FADE, Float(0), level), (b - JOIN_FADE, JOIN_FADE, level, Float(0))] where !takes.contains(where: { r.0 < $0.e + tf && r.0 + r.1 > $0.s - tf }) {
+            ramps.append((r.0, r.1, r.2, r.3))
+          }
         }
+      }
+      for r in ramps.sorted(by: { $0.s < $1.s }) {
+        params.setVolumeRamp(fromStartVolume: r.from, toEndVolume: r.to, timeRange: CMTimeRange(start: ct(r.s / speed), duration: ct(r.d / speed)))
       }
       inputs.append(params)
     }

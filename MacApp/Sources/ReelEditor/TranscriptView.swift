@@ -192,6 +192,12 @@ extension TranscriptView {
       SelectionMenu(canCut: sel.contains { !$0.cut }, canUncut: sel.contains { $0.cut }, words: shownCaption(r),
         cut: { model.cutSelection() }, uncut: { model.restoreSelection() },
         correct: { text in editCaption(r, text) },
+        record: sel.contains(where: { !$0.cut }) ? {
+          guard let (a, b) = model.selectedWordRange else { return }
+          let said = sel.filter { !$0.cut }.map(\.text).joined(separator: " ")
+          model.selectedWords = nil
+          withAnimation(.cardOpen) { model.retake = RetakeRequest(start: a, end: b, words: said) }
+        } : nil,
         comment: { t in
           // Saved on the reel, and sent to the chat's Claude at once (Sankalp, 2 Nov 2026).
           let on = "\"\(sel.map(\.text).joined(separator: " "))\" (words \(r.lowerBound) to \(r.upperBound), at \(timecode(sel.first?.s ?? 0).components(separatedBy: ".")[0]))"
@@ -284,6 +290,8 @@ struct TranscriptParagraph: View {
               WordChip(model: model, w: w, frames: frames)
               // What the captions say over the words before it, after the last of them (Edit caption, Sankalp, 15 Nov 2026).
               if w.captionEnd, let text = w.caption, !w.cut { CaptionTag(model: model, text: text, words: model.wordsOf(p).filter { $0.captionId == w.captionId }.map(\.id)) }
+              // What the new take says over the words before it (Record new audio, Sankalp, 21 Nov 2026).
+              if w.takeEnd, let id = w.take { TakeTag(model: model, overlay: id, words: model.wordsOf(p).filter { $0.take == id }.map(\.id)) }
             }
           }
           .shimmer(shimmer)
@@ -320,12 +328,13 @@ struct WordChip: View {
       // A cut word keeps its red or amber strike but is faded, with no box behind it, so the kept words are what reads
       // (Sankalp, 4 Nov 2026).
       .strikethrough(w.cut, color: (w.pending ? Ink.amber : Ink.red).opacity(0.5))
-      // A word the captions say otherwise (Edit caption) is underlined with blue dots.
-      .underline(w.caption != nil && !w.cut, pattern: .dot, color: Ink.focus)
-      .foregroundStyle(current ? Ink.onPrimary : w.pending ? Ink.amber.opacity(0.45) : w.cut ? Ink.ghost.opacity(0.7) : w.caption != nil ? Ink.faint : Ink.text)
+      // A word the captions say otherwise (Edit caption) is underlined with blue dots, a word a new take says again with
+      // green ones.
+      .underline((w.caption != nil || w.take != nil) && !w.cut, pattern: .dot, color: w.take != nil ? Ink.green : Ink.focus)
+      .foregroundStyle(current ? Ink.onPrimary : w.pending ? Ink.amber.opacity(0.45) : w.cut ? Ink.ghost.opacity(0.7) : w.caption != nil || w.take != nil ? Ink.faint : Ink.text)
       .padding(.horizontal, TRANSCRIPT_WORD_PAD)
       .background(RoundedRectangle(cornerRadius: 4).fill(selected ? Ink.select : current ? Ink.strong : hover ? Ink.sunken : .clear))
-      .help(w.pending ? "Cut from the chat, waiting for your approval" : w.caption.map { "The captions say \"\($0)\" here, the sound is untouched. Select the words and Edit caption to change it" } ?? "")
+      .help(w.pending ? "Cut from the chat, waiting for your approval" : w.take != nil ? "A new take is heard here in place of the video's sound. Select the words to record again" : w.caption.map { "The captions say \"\($0)\" here, the sound is untouched. Select the words and Edit caption to change it" } ?? "")
       .onHover { hover = $0 }
       .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("words")) }) { [frames, id = w.id] r in frames.rects[id] = r }
       .onTapGesture {
@@ -370,6 +379,35 @@ struct CaptionTag: View {
   }
 }
 
+// The words a new take says, in place of the words before it (Record new audio): in green after the last of them, with a
+// microphone, or Transcribing while its words are found. A click selects those words, so the menu records them again.
+struct TakeTag: View {
+  @ObservedObject var model: EditorModel
+  let overlay: String
+  let words: [Int]
+  @State private var hover = false
+
+  var body: some View {
+    let said = model.extraWords.filter { $0.from == overlay }.map(\.w).joined(separator: " ")
+    HStack(spacing: 4) {
+      Icon("microphone", size: 12)
+      Text(said.isEmpty ? "New take" : said).font(.inter(TRANSCRIPT_SIZE, italic: said.isEmpty))
+    }
+    .foregroundStyle(Ink.green)
+    .padding(.horizontal, 6).padding(.vertical, 1)
+    .background(RoundedRectangle(cornerRadius: 4).fill(Ink.green.opacity(hover ? 0.16 : 0.08)))
+    .contentShape(Rectangle())
+    .onHover { hover = $0 }
+    .help(said.isEmpty ? "A new take, its words still being transcribed" : "A new take is heard here in place of the video's sound. Click to select those words and record them again, or Undo to take it off")
+    .onTapGesture {
+      guard !model.claudeEditing, let a = words.min(), let b = words.max() else { return }
+      model.selectedWords = a...b
+      model.selection = nil
+      if let s = model.words[a].s { model.seek(s) }
+    }
+  }
+}
+
 // The words of the added clips and of the voice overs, under the main transcript, one part per clip or overlay, in
 // italics. Clicking a word goes to it; they are cut with the timeline (their clips are trimmed, cut or muted there).
 struct ExtraTranscript: View {
@@ -377,7 +415,7 @@ struct ExtraTranscript: View {
 
   var body: some View {
     // The voice overs only: the other videos' words are in the transcript above, in their clips.
-    let overlays = Set((model.loaded.project.edits.audioOverlays ?? []).map(\.id))
+    let overlays = Set((model.loaded.project.edits.audioOverlays ?? []).filter { !$0.isTake }.map(\.id)) // a new take's words are in the transcript above
     let groups = Dictionary(grouping: model.extraWords.filter { overlays.contains($0.from) }, by: \.from).sorted { ($0.value.first?.s ?? 0) < ($1.value.first?.s ?? 0) }
     ForEach(groups, id: \.key) { from, words in
       HStack(alignment: .top, spacing: 0) {

@@ -317,7 +317,8 @@ struct ChatUsage: Codable, Equatable {
   comes in, where they sit, the widest line and words a line) is set with set_caption_style and read with \
   get_caption_style; hide_captions and show_captions hide them over a stretch, words or a clip. edit_caption makes \
   the captions say other words over a stretch while the sound stays as it is: to merge words, rephrase them or fix a \
-  word in an added clip, never by cutting the audio when he asks for the caption alone. Text layers go on the \
+  word in an added clip, never by cutting the audio when he asks for the caption alone. replace_audio lays a new \
+  recording of some words over them, matched to the voice around them, when he has recorded them again. Text layers go on the \
   Animation layer with add_text_layer (for a part of the reel or whole true), styled the same way, with enter and exit \
   motions; update_text_layer changes one. list_fonts lists the fonts. When you talk about a clip, call it clip 5 for \
   the clip the tools call c5, as the app shows it, never c5.
@@ -629,6 +630,7 @@ struct ChatUsage: Codable, Equatable {
     case "set_focus": return i["action"] as? String
     case "write_rule_book", "edit_rule_book", "delete_rule_book": return i["name"] as? String
     case "correct_word", "edit_caption": return (i["text"] as? String).map { "to \"\($0)\"" }
+    case "replace_audio": return (i["start"] as? Double).map { "at \(timecode($0).components(separatedBy: ".")[0])" }
     case "add_animation", "update_animation": return i["kind"] as? String
     default: break
     }

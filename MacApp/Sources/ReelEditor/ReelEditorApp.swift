@@ -588,6 +588,7 @@ struct MainView: View {
     .overlay { if app.rulesOpen { RuleBooksModal(app: app) } }
     // The export modal, over everything while an export runs.
     .overlay { if let e = app.editor { ExportModalHost(model: e) } }
+    .overlay { if let e = app.editor { RetakeModalHost(model: e) } }
   }
 }
 

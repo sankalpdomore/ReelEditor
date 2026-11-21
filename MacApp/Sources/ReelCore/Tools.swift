@@ -381,6 +381,34 @@ let coreTools: [ReelTool] = [
   ReelTool(name: "delete_audio_overlay", description: "Takes an audio overlay off the project. The file is not deleted. Undoable.", inputSchema: obj(["project": projectArg, "id": ["type": "string", "pattern": "^o[0-9]{1,3}$"]], ["project", "id"])) { i in
     try edit(i, "delete_audio_overlay") { e, _, m in e = try deleteAudioOverlay(e, m, i["id"]!.string!).edl; return [:] }
   },
+  ReelTool(name: "replace_audio", description: "Record new audio: lays a new recording of some words over them when the picture is right but the sound is not clear. The take (path) is trimmed to its speech, its tone and loudness matched to the voice just before and after the words, the room's own background laid under it, and sped up a little (at most 1.2x, pitch kept) when it runs past the next word. The clips' own sound is silent under it with short fades, and the captions there say the take's words, transcribed in the background (or placed from script, the exact words said). A take already over those words is replaced. Undoable; delete_audio_overlay takes it off. Returns the take's overlay id (created) and what was matched: gainDb, toneDb (bands moved by 1 dB or more), roomTone, rate, overrun (seconds it still runs into the next word).", inputSchema: obj([
+    "project": projectArg,
+    "path": ["type": "string", "minLength": 1, "maxLength": 2048, "description": "The recording: an audio file (wav, m4a, aiff, mp3) or a video whose sound to use."],
+    "start": sec("Edit time where the words start."), "end": sec("Edit time where they end."),
+    "script": ["type": "string", "maxLength": 2000, "description": "The exact words said in the take, placed on it instead of transcribing."],
+    "wait": ["type": "boolean", "default": false, "description": "Wait for the take's words before returning."],
+  ], ["project", "path", "start", "end"])) { i in
+    let n = try name(i)
+    let url = URL(fileURLWithPath: (i["path"]!.string! as NSString).expandingTildeInPath).resolvingSymlinksInPath()
+    guard FileManager.default.fileExists(atPath: url.path) else { throw ToolError("not_found", "No file at \(url.path)") }
+    guard Media.AUDIO_EXTENSIONS.contains(url.pathExtension.lowercased()) else { throw ToolError("invalid_path", "Not an audio file (\(Media.AUDIO_EXTENSIONS.joined(separator: ", ")))") }
+    let start = i["start"]!.double!, end = i["end"]!.double!
+    guard end > start else { throw ToolError("invalid_range", "end has to be after start") }
+    let placed = try await Retake.place(try Store.load(n), take: url, start: start, end: end)
+    var out = try edit(i, "replace_audio") { e, _, m in
+      let r = try addTake(e, m, file: placed.file.path, take: url.path, duration: placed.length, start: placed.start, label: "New take")
+      e = r.edl; return r.info
+    }
+    if var o = out.object { for (k, v) in placed.report { o[k] = v }; o["file"] = .string(placed.file.path); out = .object(o) }
+    let script = i["script"]?.string
+    if Jobs.whisperx() != nil {
+      if i["wait"]?.bool == true {
+        let words = try await Jobs.transcribeFile(n, file: placed.file.path, script: script, what: "New take")
+        if var o = out.object { o["words"] = .number(Double(words)); out = .object(o) }
+      } else { Task.detached { _ = try? await Jobs.transcribeFile(n, file: placed.file.path, script: script, what: "New take") } }
+    }
+    return out
+  },
   ReelTool(name: "mute_clip_audio", description: "Silences a clip's own sound in the preview and the export (muted true, the default), or brings it back (false). The picture is untouched, and its words leave the captions. Use it when an audio overlay carries the sound instead. Undoable.", inputSchema: obj(["project": projectArg, "clip": clipArg, "muted": ["type": "boolean", "default": true]], ["project", "clip"])) { i in
     try edit(i, "mute_clip_audio") { e, _, m in let r = try muteClipAudio(e, m, i["clip"]!.string!, i["muted"]?.bool ?? true); e = r.edl; return r.info }
   },

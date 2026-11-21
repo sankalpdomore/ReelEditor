@@ -39,6 +39,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSApplicationCategoryType</key><string>public.app-category.video</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSMicrophoneUsageDescription</key><string>Reel Editor records new audio over words whose sound is not clear.</string>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>

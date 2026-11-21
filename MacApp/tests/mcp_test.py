@@ -731,6 +731,66 @@ check("loudness fits them by the loudness", 2.7 < first_line().get("start", 0) <
 set_settings(captionTiming="speech")
 check("speech fits them by the detector", 2.7 < first_line().get("start", 0) < 3.2, first_line())
 set_settings(developer=None, captionTiming=None)
+# Record new audio (21 Nov 2026): a take laid over words whose sound is bad, matched to the voice round them. The video
+# says one two three, then four five six under a loud 3 kHz whine, then seven eight, over a room hiss. The take says
+# four five six again, quietly, thin and with no room at all, after half a second of silence.
+def say(text, out):
+    subprocess.run(["say", "-o", out, text], check=True)
+    return float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", out], capture_output=True, text=True).stdout)
+parts = [("one two three", 0.5), ("four five six", 3.0), ("seven eight", 6.0)]
+lens = [say(t, os.path.join(SCRATCH, f"part{k}.aiff")) for k, (t, _) in enumerate(parts)]
+rfile = os.path.join(SCRATCH, "retake.mp4")
+mix = "".join(f"[{k + 2}]adelay={int(at * 1000)}|{int(at * 1000)},apad[p{k}];" for k, (_, at) in enumerate(parts))
+subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=320x240:d=9:r=30", "-f", "lavfi", "-i", "anoisesrc=a=0.004:d=9:r=48000"]
+               + sum([["-i", os.path.join(SCRATCH, f"part{k}.aiff")] for k in range(3)], [])
+               + ["-f", "lavfi", "-i", "sine=f=3000:r=48000:d=9", "-filter_complex",
+                  mix + f"[5]volume='0.3*between(t,3,{3 + lens[1]:.2f})':eval=frame[w];[1][p0][p1][p2][w]amix=inputs=5:duration=first:normalize=0[a]",
+                  "-map", "0:v", "-map", "[a]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-t", "9", rfile], check=True)
+def spread(text, at, length):
+    ws = text.split(" "); d = length / len(ws)
+    return [{"w": w, "s": round(at + i * d, 2), "e": round(at + (i + 1) * d - 0.05, 2)} for i, w in enumerate(ws)]
+json.dump(sum([spread(t, at, lens[k]) for k, (t, at) in enumerate(parts)], []), open(os.path.join(SCRATCH, "retake-words.json"), "w"))
+R = "retake"
+ok("create_project", {"path": rfile, "name": R, "transcribe": False}, "create a project whose middle words have bad sound")
+ok("import_transcript", {"project": R, "path": os.path.join(SCRATCH, "retake-words.json")}, "retake: its words")
+take = os.path.join(SCRATCH, "take.wav")
+say("four five six", os.path.join(SCRATCH, "take-raw.aiff"))
+subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", os.path.join(SCRATCH, "take-raw.aiff"), "-af", "highpass=f=500,volume=0.15,adelay=500,apad=pad_dur=0.8", "-ar", "48000", "-ac", "1", take], check=True)
+silent = os.path.join(SCRATCH, "take-silent.wav")
+subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "2", silent], check=True)
+w4, w6 = 3.0, round(3.0 + lens[1], 2)
+bad("replace_audio", {"project": R, "path": silent, "start": w4, "end": w6}, "no_speech", "replace_audio with a recording of silence")
+bad("replace_audio", {"project": R, "path": take, "start": 4, "end": 3}, "invalid_range", "replace_audio with end before start")
+r = ok("replace_audio", {"project": R, "path": take, "start": w4, "end": w6, "script": "four, five and six", "wait": True}, "replace_audio over the words with bad sound")
+tk = r.get("created")
+ov = next((o for o in pj(R)["edits"].get("audioOverlays", []) if o["id"] == tk), {})
+check("replace_audio lays a new take that silences the clips' sound under it", ov.get("replaces") is True and os.path.realpath(ov.get("take", "")) == os.path.realpath(take) and ov.get("label") == "New take" and "/_takes/retake/" in ov.get("file", ""), ov)
+check("the take starts a little before the first word it replaces", 2.75 < ov.get("start", 0) <= 3.0, ov)
+check("a quiet take is made louder and the room is laid under it", r.get("gainDb", 0) > 6 and r.get("roomTone") is True, r)
+check("a thin take gets its low end back", any(b["hz"] < 400 and b["db"] > 2 for b in r.get("toneDb", [])), r.get("toneDb"))
+check("the take is trimmed to its speech and fits before the next word", r.get("rate") == 1 and "overrun" not in r and r.get("speech", 9) < lens[1] + 0.4, r)
+ln = " ".join(l["text"] for l in ok("get_caption_style", {"project": R, "lines": True}).get("lines", []))
+check("the captions say the take's words in place of the words it replaces", "and six" in ln.replace(",", "") and ln.lower().count("four") == 1 and "one" in ln and "eight" in ln, ln)
+res = export(R, path=f"{base}/retake.mp4", captions=False, title=False)
+whine = lambda f, ss, t: volume_band(f, ss, t, 3000)
+def volume_band(f, ss, t, hz):
+    err = subprocess.run(["ffmpeg", "-v", "info", "-ss", str(ss), "-i", f, "-t", str(t), "-af", f"bandpass=f={hz}:w=60,volumedetect", "-f", "null", "-"], capture_output=True, text=True).stderr
+    m = re.search(r"mean_volume: (-?[\d.]+|-inf) dB", err)
+    return -200.0 if not m or m.group(1) == "-inf" else float(m.group(1))
+src_w, out_w = whine(rfile, 3.3, 0.8), whine(f"{base}/retake.mp4", 3.3, 0.8)
+check("the export plays the take, not the clip's sound under it", src_w - out_w > 20, (src_w, out_w))
+before, during = volume(f"{base}/retake.mp4", 0.5, lens[0])[0], volume(f"{base}/retake.mp4", 3.05, lens[1] - 0.1)[0]
+check("the take is about as loud as the voice before it", abs(before - during) < 5, (before, during))
+after = whine(f"{base}/retake.mp4", 6.2, 0.5)
+check("the clip's sound comes back after the take", volume(f"{base}/retake.mp4", 6.0, lens[2])[0] > -40 and after < -40, (after,))
+r2 = ok("replace_audio", {"project": R, "path": take, "start": w4, "end": w6, "script": "four five six"}, "record again over the same words")
+check("a second take over the same words replaces the first", r2.get("replaced") == [tk] and len([o for o in pj(R)["edits"]["audioOverlays"] if o.get("replaces")]) == 1, r2)
+ok("undo", {"project": R}, "undo the second take")
+check("undo brings the first take back", [o["id"] for o in pj(R)["edits"]["audioOverlays"]] == [tk], pj(R)["edits"]["audioOverlays"])
+ok("cut_range", {"project": R, "start": 1.6, "end": 2.9, "approved": True}, "cut the pause before the take")
+r3 = ok("replace_audio", {"project": R, "path": take, "start": 1.0, "end": w6}, "a take over words with a cut inside")
+ov3 = next((o for o in pj(R)["edits"]["audioOverlays"] if o["id"] == r3.get("created")), {})
+check("a take over a cut is laid out in edit time, silence where the cut is", ov3.get("duration", 0) > (w6 - 1.0) - 0.1 and r3.get("replaced") == [tk], (ov3, r3))
 bad("hide_captions", {"project": T}, "invalid_input", "hide_captions with no stretch")
 ok("hide_captions", {"project": T, "start": 0, "end": 1.5}, "hide the captions at the start")
 r = ok("add_text_layer", {"project": T, "text": "Big news\nToday", "whole": True, "font": "Inter", "weight": 800, "size": 120, "color": "#ffff00", "y": 540, "enter": "pop", "exit": "slide-left"}, "add_text_layer over the whole reel")

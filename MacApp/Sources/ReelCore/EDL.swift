@@ -58,6 +58,9 @@ public struct Clip: Codable, Equatable, Sendable {
 // window makes it a video overlay (the web editor's Face layer): its file is a video, its sound is the overlay's sound and its
 // picture is drawn in the window, on the Face layer, or on the Video layer when layer is "video". sound marks a sound effect
 // or music, played at exactly its own gain outside the voice volume. eq is its own bass and treble.
+// replaces makes it a new take (Record new audio, Sankalp, 21 Nov 2026): the clips' own sound is silent under it and the
+// words spoken there leave the captions for its own words. take is the recording it was made from, its file the take
+// matched to the voice around it (Retake.swift).
 public struct AudioOverlay: Codable, Equatable, Sendable {
   public var id: String
   public var file: String
@@ -72,7 +75,9 @@ public struct AudioOverlay: Codable, Equatable, Sendable {
   public var origin: String? = nil
   public var eq: AudioEq? = nil
   public var layer: String? = nil // "video" puts a window on the Video layer instead of Face
-  enum CodingKeys: String, CodingKey { case id, file, label, start, inn = "in", out, gain, duration, window, sound, origin, eq, layer }
+  public var replaces: Bool? = nil // a new take: the clips' own sound is silent under it
+  public var take: String? = nil // the recording a new take was matched from
+  enum CodingKeys: String, CodingKey { case id, file, label, start, inn = "in", out, gain, duration, window, sound, origin, eq, layer, replaces, take }
   public init(id: String, file: String, label: String, start: Double, inn: Double, out: Double, gain: Double, duration: Double) {
     self.id = id; self.file = file; self.label = label; self.start = start; self.inn = inn; self.out = out; self.gain = gain; self.duration = duration
   }
@@ -82,6 +87,8 @@ public struct AudioOverlay: Codable, Equatable, Sendable {
   }
   public var isFace: Bool { window != nil }
   public var isVoice: Bool { sound != true } // a voice is raised with the voice volume, a sound effect is not
+  public var isTake: Bool { replaces == true }
+  public var editEnd: Double { start + (out - inn) }
 }
 
 // pending marks a cut made from the chat (an agent through MCP), not in the app, until Sankalp approves it (approve_cuts): it
@@ -343,20 +350,32 @@ public func extraEditWords(_ plan: Plan, _ edl: Edl, _ extra: ExtraWords) -> [Ex
   return out.sorted { $0.s < $1.s }
 }
 
+// Where the new takes play, in output time (before speed), each with its overlay's id: the clips' own sound is silent there
+// and the words spoken there give way to the take's own words.
+public func takeRanges(_ plan: Plan, _ edl: Edl) -> [(id: String, range: Range)] {
+  (edl.audioOverlays ?? []).filter(\.isTake).flatMap { o in overlayPieces(plan, o).map { (o.id, Range(s: $0.outStart, e: $0.outStart + $0.fileOut - $0.fileIn)) } }
+}
+
 // The words that stay, corrected and in output time (before speed), what the captions are drawn from: the main video's
-// words and the extra ones, the words of a muted clip and everything inside a cut left out.
+// words and the extra ones, the words of a muted clip and everything inside a cut left out, and the words a new take
+// says again left out for the take's own.
 public func outputWords(_ plan: Plan, _ edl: Edl, _ words: [Word], _ extra: ExtraWords = ExtraWords()) -> [Word] {
   let mapped = mapWords(plan, words)
   let cut = wordsCut(plan, edl, words)
+  let takes = takeRanges(plan, edl)
+  func retaken(_ s: Double, _ e: Double, by from: String? = nil) -> Bool { let m = (s + e) / 2; return takes.contains { $0.id != from && m >= $0.range.s && m < $0.range.e } }
   var out: [Word] = []
   for (i, w) in words.enumerated() {
     guard !cut[i], let m = mapped[i], !inMutedClip(plan, w) else { continue }
-    out.append(Word(w: edl.corrections[String(i)] ?? w.w, s: outputOf(plan, m.s), e: outputOf(plan, m.e)))
+    let s = outputOf(plan, m.s), e = outputOf(plan, m.e)
+    if retaken(s, e) { continue }
+    out.append(Word(w: edl.corrections[String(i)] ?? w.w, s: s, e: e))
   }
   if !extra.isEmpty {
     for ew in extraEditWords(plan, edl, extra) {
       let mid = (ew.s + ew.e) / 2
       if plan.cuts.contains(where: { mid >= $0.s && mid < $0.e }) { continue }
+      if retaken(outputOf(plan, ew.s), outputOf(plan, ew.e), by: ew.from) { continue }
       out.append(Word(w: ew.w, s: outputOf(plan, ew.s), e: outputOf(plan, ew.e)))
     }
     out.sort { $0.s < $1.s }
@@ -425,6 +444,8 @@ public func normalizeOverlays(_ list: [AudioOverlay]) -> [AudioOverlay] {
     o.sound = x.sound == true && o.window == nil ? true : nil
     o.eq = normalizeEq(x.eq)
     o.layer = x.layer == "video" && o.window != nil ? "video" : nil
+    o.replaces = x.replaces == true && o.window == nil && o.sound == nil ? true : nil
+    o.take = o.replaces == true ? x.take : nil
     return o
   }.sorted { $0.start < $1.start }
   var taken = Set(clean.map(\.id).filter { !$0.isEmpty })
@@ -717,6 +738,24 @@ public func addAudioOverlay(_ edl: Edl, _ main: EdlMain, file: String, duration:
   var e = edl
   e.audioOverlays = ((edl.audioOverlays ?? []) + [o]).sorted { $0.start < $1.start }
   return OpResult(edl: e, info: ["created": .string(o.id)])
+}
+
+// Lays a new take (Retake.swift) over the reel: the takes it overlaps are taken off, so recording again over the same words
+// leaves one take there. Returns the new take's id (created) and the ids it took off (replaced).
+public func addTake(_ edl: Edl, _ main: EdlMain, file: String, take: String, duration: Double, start: Double, label: String) throws -> OpResult {
+  let o = AudioOverlay(id: "", file: file, label: label, start: round3(start), inn: 0, out: round3(duration), gain: 1, duration: round3(duration),
+                       window: nil, origin: take)
+  try checkOverlay(o)
+  let gone = (edl.audioOverlays ?? []).filter { $0.isTake && $0.start < o.editEnd - EPS && $0.editEnd > o.start + EPS }.map(\.id)
+  var rest = (edl.audioOverlays ?? []).filter { !gone.contains($0.id) }
+  var n = AudioOverlay(id: nextId("o", rest.map(\.id) + gone), file: file, label: String(label.prefix(80)), start: o.start, inn: 0, out: o.out, gain: 1, duration: o.duration, window: nil, origin: take)
+  n.replaces = true; n.take = take
+  rest.append(n)
+  var e = edl
+  e.audioOverlays = rest.sorted { $0.start < $1.start }
+  var info: [String: JSON] = ["created": .string(n.id)]
+  if !gone.isEmpty { info["replaced"] = .array(gone.map { .string($0) }) }
+  return OpResult(edl: e, info: info)
 }
 
 public func updateAudioOverlay(_ edl: Edl, _ main: EdlMain, _ id: String, start: Double?, inn: Double?, out: Double?, gain: Double?, label: String?,

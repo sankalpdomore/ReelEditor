@@ -25,7 +25,12 @@ struct WordView: Identifiable { let id: Int; let text: String; let s: Double?; l
   var caption: String? = nil // what the captions say over this word instead, from a caption rewrite (edit_caption)
   var captionId: String? = nil // that rewrite's id
   var captionEnd = false // the last word of the rewrite in its paragraph, where the transcript shows the caption's words
+  var take: String? = nil // the new take said over this word (Record new audio), its overlay's id
+  var takeEnd = false // the last word under the take in its paragraph, where the transcript shows the take's words
 }
+
+// Record new audio (Sankalp, 21 Nov 2026): the words picked, edit seconds, while the recording card is open.
+struct RetakeRequest: Identifiable, Equatable { let id = UUID(); let start: Double; let end: Double; let words: String }
 // A paragraph of the transcript, in the order the reel plays: a section heading when one starts there, its words, and the
 // clip and video it belongs to; clipStart marks the first paragraph of a clip, where its header goes.
 struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [Int]; var clip = ""; var source = MAIN; var label = ""; var clipStart = false }
@@ -48,6 +53,7 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
   @Published var selection: ReelCore.Range? = nil // edit time
   @Published var selectedWords: ClosedRange<Int>? = nil
   @Published var selectedAnimation: String? = nil
+  @Published var retake: RetakeRequest? = nil // the recording card, open over the words picked
   @Published var exportOpen = false // the export modal: open from the start of an export, from the app or an agent, until closed
   @Published var selectedCut: ReelCore.Range? = nil // a cut clicked on the timeline, with handles on its edges (edit time)
   @Published private(set) var status: JSON = [:]
@@ -157,6 +163,11 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
       }
       // cut:12.5 selects the cut at that time, with its handles.
       if sel.hasPrefix("cut"), let t = nums.first { selectedCut = plan.cuts.first { t >= $0.s && t <= $0.e } }
+      // With REEL_EDITOR_RETAKE=1 the selected words open the Record new audio card.
+      if ProcessInfo.processInfo.environment["REEL_EDITOR_RETAKE"] == "1", let r = selectedWords, let (a, b) = selectedWordRange {
+        retake = RetakeRequest(start: a, end: b, words: words[r].filter { !$0.cut }.map(\.text).joined(separator: " "))
+        selectedWords = nil
+      }
     }
   }
 
@@ -205,6 +216,19 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
         for (k, id) in p.words.enumerated() where all[id].captionId != nil {
           if k == p.words.count - 1 || all[p.words[k + 1]].captionId != all[id].captionId { all[id].captionEnd = true }
         }
+      }
+    }
+    // The new takes over each word, by the word's middle; a cut word is not under it.
+    let takes = (edl.audioOverlays ?? []).filter(\.isTake)
+    if !takes.isEmpty {
+      for k in all.indices where !all[k].cut {
+        guard let s = all[k].s, let e = all[k].e else { continue }
+        let m = (s + e) / 2
+        if let o = takes.first(where: { m >= $0.start && m < $0.editEnd }) { all[k].take = o.id }
+      }
+      for p in paras {
+        let live = p.words.filter { all[$0].take != nil }
+        for id in live where live.last(where: { all[$0].take == all[id].take }) == id { all[id].takeEnd = true }
       }
     }
     words = all
@@ -378,6 +402,26 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
   }
 
   func step(_ seconds: Double) { seek(clock.time + seconds) }
+
+  // The picture of some words played with no sound while a take is recorded, at the pace they were said (the reel's speed
+  // taken off), from a second before them, so the take can follow the lips.
+  func playAlong(from t: Double) {
+    seek(editOf(plan, max(0, outputOf(plan, t) - 1)))
+    player.isMuted = true
+    player.playImmediately(atRate: Float(1 / speed))
+    clock.playing = true
+  }
+
+  // And the reel played as it is, with its sound, from a second before some words: to hear a take in place.
+  func playFrom(_ t: Double) {
+    player.pause()
+    player.isMuted = false
+    seek(editOf(plan, max(0, outputOf(plan, t) - 1)))
+    player.play()
+    clock.playing = true
+  }
+
+  func stopPlaying() { player.pause(); player.isMuted = false; clock.playing = false }
 
   // ------------------------------------------------------------------------------------------------------------------
   // Editing, through the same tools an agent calls
