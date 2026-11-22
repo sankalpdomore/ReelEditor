@@ -702,6 +702,7 @@ struct OverlayBlock: View {
   let o: AudioOverlay
   let height: Double
   @State private var dx: Double = 0
+  var name: String { o.isTake && o.label == "New take" ? AudioOverlay.takeLabel : o.label }
 
   var body: some View {
     let z = model.zoom
@@ -722,20 +723,25 @@ struct OverlayBlock: View {
         }
         ctx.fill(path, with: .color(Color(nsColor: NSColor(hex: 0x2f7d3b, alpha: 0.45))))
       }
-      Text("\(o.isFace ? "Face, " : "")\(o.label)\(abs(o.gain - 1) > 0.01 ? String(format: ", %.0f%%", o.gain * 100) : "")")
-        .font(.inter(12, .medium)).foregroundStyle(Ink.strong).lineLimit(1).padding(.horizontal, 8)
+      // A new take has the audio icon and is New audio override, so it is told from a voice over at a glance (Sankalp,
+      // 21 Nov 2026); takes laid before then were labelled New take and read the same.
+      HStack(spacing: 4) {
+        if o.isTake { Icon("waveform", size: 12) }
+        Text("\(o.isFace ? "Face, " : "")\(name)\(abs(o.gain - 1) > 0.01 ? String(format: ", %.0f%%", o.gain * 100) : "")").lineLimit(1)
+      }
+      .font(.inter(12, .medium)).foregroundStyle(Ink.strong).padding(.horizontal, 8)
     }
     .frame(width: w, height: height)
     .clipShape(RoundedRectangle(cornerRadius: 8))
     .contentShape(Rectangle())
-    .help("\(o.label) · \(timecode(o.start)) to \(timecode(o.start + o.out - o.inn)) · volume \(Int(o.gain * 100))%. Click for its settings")
+    .help("\(name) · \(timecode(o.start)) to \(timecode(o.start + o.out - o.inn)) · volume \(Int(o.gain * 100))%. Click for its settings")
     .onTapGesture(coordinateSpace: .named("editor")) { at in model.show(.overlay(o.id), at: at) }
     .highPriorityGesture(DragGesture(minimumDistance: 3, coordinateSpace: .global).onChanged { dx = $0.translation.width }.onEnded { g in
       model.run("update_audio_overlay", ["id": .string(o.id), "start": .number(round3(max(0, o.start + g.translation.width / z)))])
       dx = 0
     })
     .contextMenu {
-      Text(o.label)
+      Text(name)
       Menu("Volume") {
         ForEach([0.25, 0.5, 0.75, 1, 1.5, 2], id: \.self) { g in
           Button { model.run("update_audio_overlay", ["id": .string(o.id), "gain": .number(g)]) } label: {

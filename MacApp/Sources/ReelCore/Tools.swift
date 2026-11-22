@@ -395,21 +395,25 @@ let coreTools: [ReelTool] = [
     let start = i["start"]!.double!, end = i["end"]!.double!
     guard end > start else { throw ToolError("invalid_range", "end has to be after start") }
     let l = try Store.load(n)
-    if let o = l.project.edits.audioOverlays?.first(where: { $0.isTake && $0.start < end - EPS && $0.editEnd > start + EPS }) {
-      throw ToolError("take_there", "A new take is already over these words (\(o.id)). Take it off with delete_audio_overlay first, then record again")
+    // Over what plays only (output time): a take is laid in edit time with silence across the cuts in it, so cut words
+    // inside an earlier take's stretch are not under it, and picking them with the words after it is no clash
+    // (Sankalp, 21 Nov 2026).
+    let oS = outputOf(l.plan, start), oE = outputOf(l.plan, end)
+    if let t = takeRanges(l.plan, l.project.edits).first(where: { $0.range.s < oE - 0.05 && $0.range.e > oS + 0.05 }) {
+      throw ToolError("take_there", "A new take is already over these words (\(t.id)). Take it off with delete_audio_overlay first, then record again")
     }
     let placed = try await Retake.place(l, take: url, start: start, end: end)
     var out = try edit(i, "replace_audio") { e, _, m in
-      let r = try addTake(e, m, file: placed.file.path, take: url.path, duration: placed.length, start: placed.start, label: "New take")
+      let r = try addTake(e, m, file: placed.file.path, take: url.path, duration: placed.length, start: placed.start, label: AudioOverlay.takeLabel)
       e = r.edl; return r.info
     }
     if var o = out.object { for (k, v) in placed.report { o[k] = v }; o["file"] = .string(placed.file.path); out = .object(o) }
     let script = i["script"]?.string
     if Jobs.whisperx() != nil {
       if i["wait"]?.bool == true {
-        let words = try await Jobs.transcribeFile(n, file: placed.file.path, script: script, what: "New take")
+        let words = try await Jobs.transcribeFile(n, file: placed.file.path, script: script, what: AudioOverlay.takeLabel)
         if var o = out.object { o["words"] = .number(Double(words)); out = .object(o) }
-      } else { Task.detached { _ = try? await Jobs.transcribeFile(n, file: placed.file.path, script: script, what: "New take") } }
+      } else { Task.detached { _ = try? await Jobs.transcribeFile(n, file: placed.file.path, script: script, what: AudioOverlay.takeLabel) } }
     }
     return out
   },

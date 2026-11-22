@@ -130,7 +130,7 @@ struct EditorTab: Identifiable, Equatable { let id = UUID(); var project: String
     var parts = ["project \(e.name)", "playhead \(timecode(e.clock.time))"]
     if let c = locate(e.plan, e.clock.time)?.clip { parts.append("clip \(c.id)") }
     if let s = e.selection { parts.append("selected range \(timecode(s.s)) to \(timecode(s.e))") }
-    if let r = e.selectedWords { parts.append("selected words \(r.lowerBound) to \(r.upperBound): \"\(e.words[r].map(\.text).joined(separator: " "))\"") }
+    if let r = e.selectedWords, r.upperBound < e.words.count { parts.append("selected words \(r.lowerBound) to \(r.upperBound): \"\(e.words[r].map(\.text).joined(separator: " "))\"") }
     if let a = e.selectedAnimation { parts.append("selected animation \(a)") }
     return parts.joined(separator: ", ")
   }

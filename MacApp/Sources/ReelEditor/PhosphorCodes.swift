@@ -5,6 +5,7 @@ enum PhosphorCodes {
     "app-window": 0xe5da,
     "arrow-clockwise": 0xe036,
     "arrow-counter-clockwise": 0xe038,
+    "arrow-down": 0xe03e,
     "arrow-square-out": 0xe5de,
     "arrow-u-up-left": 0xe08a,
     "arrow-up": 0xe08e,

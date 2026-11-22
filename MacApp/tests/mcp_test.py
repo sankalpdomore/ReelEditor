@@ -764,7 +764,7 @@ bad("replace_audio", {"project": R, "path": take, "start": 4, "end": 3}, "invali
 r = ok("replace_audio", {"project": R, "path": take, "start": w4, "end": w6, "script": "four, five and six", "wait": True}, "replace_audio over the words with bad sound")
 tk = r.get("created")
 ov = next((o for o in pj(R)["edits"].get("audioOverlays", []) if o["id"] == tk), {})
-check("replace_audio lays a new take that silences the clips' sound under it", ov.get("replaces") is True and os.path.realpath(ov.get("take", "")) == os.path.realpath(take) and ov.get("label") == "New take" and "/_takes/retake/" in ov.get("file", ""), ov)
+check("replace_audio lays a new take that silences the clips' sound under it", ov.get("replaces") is True and os.path.realpath(ov.get("take", "")) == os.path.realpath(take) and ov.get("label") == "New audio override" and "/_takes/retake/" in ov.get("file", ""), ov)
 check("the take starts a little before the first word it replaces", 2.75 < ov.get("start", 0) <= 3.0, ov)
 check("a quiet take is made louder and the room is laid under it", r.get("gainDb", 0) > 6 and r.get("roomTone") is True, r)
 check("a thin take gets its low end back", any(b["hz"] < 400 and b["db"] > 2 for b in r.get("toneDb", [])), r.get("toneDb"))
@@ -801,6 +801,14 @@ check("edit_caption over a take's words changes the take's captions", "Four, fiv
 ok("delete_audio_overlay", {"project": R, "id": r3.get("created")}, "take the take off to record again over the rewrite")
 r4 = ok("replace_audio", {"project": R, "path": take, "start": 1.0, "end": w6, "script": "four five six", "wait": True}, "record again over the rewrite")
 check("a new take clears the caption rewrites inside it", r4.get("captionRewritesCleared") == 1 and not pj(R)["edits"].get("captionRewrites"), (r4, pj(R)["edits"].get("captionRewrites")))
+# A take is laid in edit time with silence across the cuts in it, so cut words at its end are inside its stretch but not
+# under it: picking them with the words after it records a take beside it, not over it (Sankalp, 21 Nov 2026).
+ov4 = next((o for o in pj(R)["edits"]["audioOverlays"] if o["id"] == r4.get("created")), {})
+E = ov4.get("start", 0) + ov4.get("duration", 0)
+ok("cut_range", {"project": R, "start": round(E - 0.3, 3), "end": round(E + 0.5, 3), "approved": True}, "cut the end of the take and the pause after it")
+r5 = ok("replace_audio", {"project": R, "path": take, "start": round(E - 0.2, 3), "end": round(6.0 + lens[2], 2), "script": "seven eight", "wait": True}, "a take picked from cut words inside the last take's stretch on to the words after it")
+ids = [o["id"] for o in pj(R)["edits"]["audioOverlays"]]
+check("the new take is laid beside the last one, not refused", r5.get("created") in ids and r4.get("created") in ids, (r5, ids))
 bad("hide_captions", {"project": T}, "invalid_input", "hide_captions with no stretch")
 ok("hide_captions", {"project": T, "start": 0, "end": 1.5}, "hide the captions at the start")
 r = ok("add_text_layer", {"project": T, "text": "Big news\nToday", "whole": True, "font": "Inter", "weight": 800, "size": 120, "color": "#ffff00", "y": 540, "enter": "pop", "exit": "slide-left"}, "add_text_layer over the whole reel")

@@ -14,6 +14,8 @@ struct ChatPanel: View {
   @AppStorage("chatSide") private var sideOpen = false
   @State private var draft = ""
   @State private var dropping = false // a file dragged over the chat
+  @State private var atEnd = true // the chat is scrolled to its end; the Scroll to latest button shows when it is not
+  @State private var following = true // new messages and Claude's growing reply take the chat down with them
   @FocusState private var typing: Bool
 
   var body: some View {
@@ -26,7 +28,9 @@ struct ChatPanel: View {
       Hairline()
       ScrollViewReader { proxy in
         ScrollView {
-          LazyVStack(alignment: .leading, spacing: 12) {
+          // A plain VStack, not a lazy one: a lazy stack guesses the height of rows it has not laid out, so scrolling to the
+          // end stopped short and Claude's last lines sat under the bottom edge (Sankalp, 21 Nov 2026).
+          VStack(alignment: .leading, spacing: 12) {
             if direct.messages.isEmpty {
               empty("Ask Claude to edit this reel. It runs on the account above with the editor's tools. Each message goes with the project, the playhead and what is selected. Drop .md rule books here to add them to this project's rules.")
             }
@@ -49,11 +53,42 @@ struct ChatPanel: View {
               }
               .id("thinking")
             }
+            // The end of the chat, what it scrolls to.
+            Color.clear.frame(height: 1).id("end")
           }
           .padding(.horizontal, 16).padding(.vertical, 16)
         }
+        // Follows the chat down whenever anything is added or grows, whoever started it (Sankalp, 21 Nov 2026): a message
+        // of his or Claude's, a comment sent from the transcript, a tool call folded into the row before it, Claude's reply
+        // as it comes in, and the working line when a turn starts or ends. Scrolling up to read stops the following, so the
+        // chat does not pull him back down mid sentence; Scroll to latest, scrolling back to the end, or sending a message
+        // starts it again.
+        .onScrollGeometryChange(for: Bool.self, of: { Self.isAtEnd($0) }) { _, end in atEnd = end }
+        .onScrollPhaseChange { _, phase, context in
+          if phase == .interacting { following = false }
+          if phase == .idle { following = Self.isAtEnd(context.geometry) }
+        }
         .onAppear { scrollToEnd(proxy) }
-        .onChange(of: direct.messages.count) { _, _ in withAnimation { scrollToEnd(proxy) } }
+        .onChange(of: direct.messages.count) { _, _ in
+          if direct.messages.last?.role == "you" { following = true }
+          if following { withAnimation { scrollToEnd(proxy) } }
+        }
+        .onChange(of: direct.messages.last) { _, _ in if following { scrollToEnd(proxy) } }
+        .onChange(of: direct.state) { _, _ in if following { withAnimation { scrollToEnd(proxy) } } }
+        // Scroll to latest, at the bottom of the chat whenever it is not scrolled to its end (Sankalp, 21 Nov 2026).
+        .overlay(alignment: .bottom) {
+          if !atEnd && !direct.messages.isEmpty {
+            Button { following = true; withAnimation(.cardOpen) { proxy.scrollTo("end", anchor: .bottom) } } label: {
+              IconLabel("Scroll to latest", icon: "arrow-down")
+            }
+            .pill(.outline, .sm)
+            .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
+            .help("Go to the newest message")
+            .padding(.bottom, 12)
+            .transition(.scale(scale: 0.9).combined(with: .opacity))
+          }
+        }
+        .animation(.cardOpen, value: atEnd)
       }
       Hairline()
       ChatUsageRow(direct: direct).padding(.horizontal, 16).padding(.top, 12)
@@ -110,8 +145,15 @@ struct ChatPanel: View {
     .padding(.top, 32).frame(maxWidth: .infinity)
   }
 
+  // To the bottom of the chat. Not to the last message's row: a run of the same tool is folded into one row named after its
+  // first call, so the last message often has no row of its own and the chat stayed where it was.
   func scrollToEnd(_ proxy: ScrollViewProxy) {
-    if direct.state == "thinking" { proxy.scrollTo("thinking", anchor: .bottom) } else if let l = direct.messages.last { proxy.scrollTo(l.id, anchor: .bottom) }
+    DispatchQueue.main.async { proxy.scrollTo("end", anchor: .bottom) }
+  }
+
+  // Within 24 points of the end counts as the end, so the bottom padding and a line of rounding do not show the button.
+  static func isAtEnd(_ g: ScrollGeometry) -> Bool {
+    g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 24
   }
 
   // Moves the chat: into the column on the right of the window, or back into the floating card.

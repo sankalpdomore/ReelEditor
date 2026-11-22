@@ -55,6 +55,8 @@ struct TranscriptView: View {
   @State private var frames = WordFrames()
   @State private var paneWidth: CGFloat = 10_000 // the width the words are laid out in, for the selection menu to fit
   @State private var menuWidth: CGFloat = 0
+  @State private var scrolledAt = Date.distantPast // when Sankalp last scrolled the transcript himself
+  static let followPause: TimeInterval = 10 // how long his own scrolling holds Follow off
 
   var body: some View {
     // With no words at all, the clips are still listed in the order they play, each with its video's name and place in
@@ -125,13 +127,18 @@ struct TranscriptView: View {
             FocusTag(text: Self.label(f) + ", " + Self.span(f)).padding(.top, 8).transition(.opacity.combined(with: .move(edge: .top)))
           }
         }
+        // Scrolling the transcript by hand holds Follow off for ten seconds after the last scroll, so he can read up and
+        // down while it plays or Claude works, and it follows again after (Sankalp, 21 Nov 2026).
+        .onScrollPhaseChange { _, phase in
+          if phase == .interacting || phase == .decelerating { scrolledAt = Date() }
+        }
         // Follows Claude through the reel: the paragraph it works on comes into view, unless the video is playing.
         .onChange(of: focusedParagraphs.first) { _, p in
-          guard let p, !model.clock.playing else { return }
+          guard let p, !model.clock.playing, !heldByScroll else { return }
           withAnimation(.easeInOut(duration: 0.4)) { proxy.scrollTo(p, anchor: .top) }
         }
         .onChange(of: model.currentWord) { _, w in
-          guard model.follow, model.clock.playing, let w, let p = model.paragraphs.first(where: { $0.words.contains(w) }) else { return }
+          guard model.follow, model.clock.playing, !heldByScroll, let w, let p = model.paragraphs.first(where: { $0.words.contains(w) }) else { return }
           withAnimation { proxy.scrollTo(p.id, anchor: .top) }
         }
       }
@@ -140,6 +147,8 @@ struct TranscriptView: View {
 }
 
 extension TranscriptView {
+  var heldByScroll: Bool { Date().timeIntervalSince(scrolledAt) < Self.followPause }
+
   // The paragraphs in order, cut into runs: each run of paragraphs Claude is working on together, every other paragraph
   // on its own.
   static func runs(_ paras: [Paragraph], lit: Set<Int>) -> [[Paragraph]] {
@@ -188,7 +197,7 @@ extension TranscriptView {
 
   // The selection menu, above the first selected word, or below the last when there is no room above.
   @ViewBuilder var menu: some View {
-    if !model.claudeEditing, let r = model.selectedWords, let first = frames.rects[r.lowerBound] {
+    if !model.claudeEditing, let r = model.selectedWords, r.upperBound < model.words.count, let first = frames.rects[r.lowerBound] {
       let sel = model.words[r]
       let below = first.minY < 56
       let y = below ? (frames.rects[r.upperBound]?.maxY ?? first.maxY) + 8 : first.minY - 52
@@ -198,14 +207,19 @@ extension TranscriptView {
         correct: { text in editCaption(r, text) },
         // No take over a take (Sankalp, 21 Nov 2026): to record again, Remove new audio first.
         record: sel.contains(where: { !$0.cut }) && model.selectedTakes.isEmpty ? {
-          guard let (a, b) = model.selectedWordRange else { return }
-          let said = sel.filter { !$0.cut }.map(\.text).joined(separator: " ")
+          // From the first word that plays to the last: struck words at either end are left out, so a take is never
+          // refused for cut words another take runs over in silence (Sankalp, 21 Nov 2026).
+          let heard = sel.filter { !$0.cut && $0.s != nil }
+          guard let a = heard.first?.s, let b = heard.last?.e else { return }
+          let said = heard.map(\.text).joined(separator: " ")
           model.selectedWords = nil
           withAnimation(.cardOpen) { model.retake = RetakeRequest(start: a, end: b, words: said) }
         } : nil,
         removeTake: model.selectedTakes.isEmpty ? nil : {
-          for id in model.selectedTakes { model.run("delete_audio_overlay", ["id": .string(id)]) }
+          // The selection goes first: the take's words leave the list with the take.
+          let ids = model.selectedTakes
           model.selectedWords = nil
+          for id in ids { model.run("delete_audio_overlay", ["id": .string(id)]) }
         },
         comment: { t in
           // Saved on the reel, and sent to the chat's Claude at once (Sankalp, 2 Nov 2026).

@@ -272,6 +272,7 @@ struct RetakeCard: View {
     model.error = nil
     model.run("replace_audio", ["path": .string(url.path), "start": .number(round3(request.start)), "end": .number(round3(request.end))]) { r in
       stage = .done(r)
+      if let id = r["created"]?.string { model.askClaudeToPunctuate(take: id) }
     }
     // A failure lands in model.error; the card says so instead of spinning.
     Task { @MainActor in

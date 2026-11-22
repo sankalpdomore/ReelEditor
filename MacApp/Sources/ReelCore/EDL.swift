@@ -88,6 +88,7 @@ public struct AudioOverlay: Codable, Equatable, Sendable {
   public var isFace: Bool { window != nil }
   public var isVoice: Bool { sound != true } // a voice is raised with the voice volume, a sound effect is not
   public var isTake: Bool { replaces == true }
+  public static let takeLabel = "New audio override" // the name of a new take on the timeline (Sankalp, 21 Nov 2026)
   public var editEnd: Double { start + (out - inn) }
 }
 
@@ -747,7 +748,8 @@ public func addTake(_ edl: Edl, _ main: EdlMain, file: String, take: String, dur
   var o = AudioOverlay(id: "", file: file, label: label, start: round3(start), inn: 0, out: round3(duration), gain: 1, duration: round3(duration),
                        window: nil, origin: take)
   try checkOverlay(o)
-  let there = (edl.audioOverlays ?? []).filter { $0.isTake && $0.start < o.editEnd - EPS && $0.editEnd > o.start + EPS }.map(\.id)
+  // A take placed beside another starts where that one ends (Retake.place stops at its edge), so 10 ms of rounding is no clash.
+  let there = (edl.audioOverlays ?? []).filter { $0.isTake && $0.start < o.editEnd - 0.01 && $0.editEnd > o.start + 0.01 }.map(\.id)
   if !there.isEmpty { throw EdlError("take_there", "A new take is already over these words (\(there.joined(separator: ", "))). Take it off with delete_audio_overlay first, then record again") }
   // The caption rewrites inside it were made for the words said before; the take's own words are captioned now.
   let rewrites = (edl.captionRewrites ?? []).filter { let m = ($0.start + $0.end) / 2; return m < o.start || m >= o.editEnd }

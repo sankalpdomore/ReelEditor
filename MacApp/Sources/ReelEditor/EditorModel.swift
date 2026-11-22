@@ -234,7 +234,7 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
           }
           // While its words are found, the take is one placeholder word, New take, that selects it all the same.
           if said.isEmpty {
-            var v = WordView(id: all.count, text: "New take", s: o.start, e: o.editEnd, cut: false, extra: true)
+            var v = WordView(id: all.count, text: AudioOverlay.takeLabel, s: o.start, e: o.editEnd, cut: false, extra: true)
             v.takeOf = o.id; v.takeFirst = true; v.takeLast = true; v.placeholder = true
             added.append(all.count); all.append(v)
           }
@@ -258,6 +258,9 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
       }
     }
     words = all
+    // A selection of words that are gone (a take's words after Remove new audio) is dropped, so nothing reads past the
+    // end of the list (Sankalp, 22 Nov 2026: removing a take crashed the app).
+    if let r = selectedWords, r.upperBound >= words.count { selectedWords = nil }
     let frame = exportSize
     captionStyle = Captions.style(edl, landscape: frame.width > frame.height)
     captionLines = flags.captions ? Captions.lines(loaded, plan, speed: speed, style: captionStyle, frame: frame) : []
@@ -450,6 +453,28 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
 
   func stopPlaying() { player.pause(); player.isMuted = false; clock.playing = false }
 
+  // A new take's words come back from the transcriber as spoken, often with no full stops or capitals. Once they are in,
+  // they go to Claude as a comment on the take, to fix their punctuation by the rule books without changing a word
+  // (Sankalp, 21 Nov 2026). It waits up to five minutes for the words, and gives up when the take comes off first.
+  func askClaudeToPunctuate(take id: String) {
+    Task { @MainActor in
+      for _ in 0..<600 {
+        guard loaded.project.edits.audioOverlays?.contains(where: { $0.id == id }) == true else { return }
+        let ws = extraWords.filter { $0.from == id }
+        if let a = ws.first?.s, let b = ws.last?.e {
+          let said = ws.map(\.w).joined(separator: " ")
+          let note = "I recorded this as a new take. Its captions are the transcriber's words as I said them: fix their full stops, commas, question marks and capitals with edit_caption by the rule books, so they read as sentences. Keep every word I said."
+          let on = "the new take \"\(said)\" (\(id), at \(timecode(a).components(separatedBy: ".")[0]))"
+          run("add_comment", ["start": .number(round3(a)), "end": .number(round3(b)), "comment": .string(note)]) { res in
+            DirectChat.shared.sendComment(note, on: on, id: res["comment"]?["id"]?.string)
+          }
+          return
+        }
+        try? await Task.sleep(for: .milliseconds(500))
+      }
+    }
+  }
+
   // ------------------------------------------------------------------------------------------------------------------
   // Editing, through the same tools an agent calls
 
@@ -469,7 +494,7 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
   }
 
   var selectedWordRange: (Double, Double)? {
-    guard let r = selectedWords else { return nil }
+    guard let r = selectedWords, r.upperBound < words.count else { return nil }
     let ws = words[r].filter { $0.s != nil }
     guard let a = ws.first?.s, let b = ws.last?.e else { return nil }
     return (a, b)
@@ -490,7 +515,7 @@ struct Paragraph: Identifiable { let id: Int; let title: String?; let words: [In
 
   // The new takes a selection is in.
   var selectedTakes: [String] {
-    guard let r = selectedWords else { return [] }
+    guard let r = selectedWords, r.upperBound < words.count else { return [] }
     return Array(Set(words[r].compactMap { $0.takeOf ?? $0.take })).sorted()
   }
   func cutSelection() {
